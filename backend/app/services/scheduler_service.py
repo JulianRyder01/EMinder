@@ -52,10 +52,11 @@ def _send_recurring_emails_task():
 
 # --- 【新增】用于执行自定义周期性任务的顶级函数 ---
 # 同样是为了解决 APScheduler 的序列化问题
-def _send_custom_cron_email_task(receiver_emails: list[str], template_type: str, data: dict):
+def _send_custom_cron_email_task(receiver_emails: list[str], template_type: str, data: dict, custom_subject: str = None):
     """
     根据指定的参数，向一个邮件列表发送模板邮件。
     这是一个独立的函数，用于用户自定义的周期性任务。
+    【新增】增加了 custom_subject 参数。
     """
     print(f"\n[{datetime.datetime.now()}] --- 开始执行自定义周期任务: 发送 '{template_type}' ---")
     
@@ -70,11 +71,14 @@ def _send_custom_cron_email_task(receiver_emails: list[str], template_type: str,
 
     email_content = template_func(data)
     
-    print(f"准备向 {len(receiver_emails)} 位接收者发送邮件: {', '.join(receiver_emails)}")
+    # 【修改】如果提供了自定义标题，则使用它；否则，使用模板的默认标题。
+    final_subject = custom_subject if custom_subject else email_content["subject"]
+    
+    print(f"准备向 {len(receiver_emails)} 位接收者发送邮件 (标题: '{final_subject}'): {', '.join(receiver_emails)}")
     for email in receiver_emails:
         email_service.send_email(
             receiver_email=email,
-            subject=email_content["subject"],
+            subject=final_subject,
             html_content=email_content["html"]
         )
     
@@ -92,18 +96,23 @@ class SchedulerService:
     # 【修改点】原有的 _send_scheduled_emails 实例方法已被上面的顶级函数替代，故删除。
 
     @staticmethod
-    def send_single_email_task(receiver_email: str, template_type: str, data: dict):
+    def send_single_email_task(receiver_email: str, template_type: str, data: dict, custom_subject: str = None):
         """
         这是一个静态方法，专门被 APScheduler 调用来执行一次性任务。
         它不依赖 SchedulerService 实例的状态，因此可以被安全地序列化。
+        【新增】增加了 custom_subject 参数。
         """
         print(f"执行一次性任务：向 {receiver_email} 发送 '{template_type}' 模板邮件。")
         template_func = getattr(template_manager, template_type, None)
         if template_func:
             email_content = template_func(data)
+            
+            # 【修改】如果提供了自定义标题，则使用它；否则，使用模板的默认标题。
+            final_subject = custom_subject if custom_subject else email_content["subject"]
+            
             email_service.send_email(
                 receiver_email,
-                email_content["subject"],
+                final_subject,
                 email_content["html"]
             )
         else:

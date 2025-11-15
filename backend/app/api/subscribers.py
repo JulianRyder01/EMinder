@@ -80,6 +80,7 @@ async def send_email_now(request: Request, background_tasks: BackgroundTasks):
     """
     立即发送一封指定的邮件。
     现在接收 JSON body，以支持动态模板字段。
+    【新增】支持 custom_subject 字段。
     """
     try:
         payload = await request.json()
@@ -89,6 +90,7 @@ async def send_email_now(request: Request, background_tasks: BackgroundTasks):
     receiver_email = payload.get("receiver_email")
     template_type = payload.get("template_type")
     template_data = payload.get("template_data", {})
+    custom_subject = payload.get("custom_subject") # 新增
 
     if not receiver_email or not template_type:
         raise HTTPException(status_code=422, detail="请求体中缺少 'receiver_email' 或 'template_type'。")
@@ -101,10 +103,13 @@ async def send_email_now(request: Request, background_tasks: BackgroundTasks):
     
     email_content = template_func(template_data)
     
+    # 【修改】决定最终使用的标题
+    final_subject = custom_subject if custom_subject else email_content["subject"]
+    
     background_tasks.add_task(
         email_service.send_email,
         receiver_email,
-        email_content["subject"],
+        final_subject,
         email_content["html"]
     )
     
@@ -116,6 +121,7 @@ async def schedule_email_once(request: Request):
     """
     调度一个一次性的邮件发送任务。
     现在接收 JSON body。
+    【新增】支持 custom_subject 字段。
     """
     try:
         payload = await request.json()
@@ -126,6 +132,7 @@ async def schedule_email_once(request: Request):
     template_type = payload.get("template_type")
     send_at_str = payload.get("send_at") # 格式: "YYYY-MM-DD HH:MM"
     template_data = payload.get("template_data", {})
+    custom_subject = payload.get("custom_subject") # 新增
 
     if not all([receiver_email, template_type, send_at_str]):
         raise HTTPException(status_code=422, detail="请求体中缺少 'receiver_email', 'template_type' 或 'send_at'。")
@@ -137,12 +144,12 @@ async def schedule_email_once(request: Request):
     except ValueError:
         raise HTTPException(status_code=422, detail="时间格式错误，请使用 'YYYY-MM-DD HH:MM' 格式。")
 
-    # 使用调度器添加一次性任务
+    # 【修改】将 custom_subject 添加到传递给任务的参数列表中
     job = scheduler_service.scheduler.add_job(
         scheduler_service.send_single_email_task,
         trigger='date',
         run_date=aware_dt,
-        args=[receiver_email, template_type, template_data],
+        args=[receiver_email, template_type, template_data, custom_subject],
         id=f"once_{receiver_email}_{datetime.datetime.now().timestamp()}",
         name=f"One-time email to {receiver_email}"
     )
@@ -157,6 +164,7 @@ async def schedule_email_once(request: Request):
 async def schedule_email_cron(request: Request):
     """
     【新增】通过 Cron 表达式调度一个周期性的邮件发送任务。
+    【新增】支持 custom_subject 字段。
     """
     try:
         payload = await request.json()
@@ -168,6 +176,7 @@ async def schedule_email_cron(request: Request):
     template_type = payload.get("template_type")
     template_data = payload.get("template_data", {})
     receiver_emails = payload.get("receiver_emails", [])
+    custom_subject = payload.get("custom_subject") # 新增
 
     if not all([job_name, cron_string, template_type, receiver_emails]):
         raise HTTPException(status_code=422, detail="请求体中缺少 'job_name', 'cron_string', 'template_type' 或 'receiver_emails'。")
@@ -179,12 +188,12 @@ async def schedule_email_cron(request: Request):
     job_id = f"cron_{template_type}_{uuid.uuid4().hex[:8]}"
     
     try:
+        # 【修改】将 custom_subject 添加到传递给任务的参数列表中
         job = scheduler_service.add_cron_job(
             job_id=job_id,
             name=job_name,
             cron_string=cron_string,
-            # 传递给 APScheduler 任务函数的参数
-            args=[receiver_emails, template_type, template_data]
+            args=[receiver_emails, template_type, template_data, custom_subject]
         )
         return {
             "status": "success",

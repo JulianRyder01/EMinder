@@ -229,7 +229,9 @@ def get_template_key_from_display_name(display_name):
         if value["display_name"] == display_name:
             return key
     return None
-def send_or_schedule_email(action: str, receiver_selection: str, template_choice: str, send_at: str, *dynamic_field_values):
+    
+def send_or_schedule_email(action: str, receiver_selection: str, template_choice: str, custom_subject: str, send_at: str, *dynamic_field_values):
+    """【修改】新增 custom_subject 参数"""
     receiver_email = get_email_from_selection(receiver_selection)
     if not receiver_email or not template_choice:
         return "错误：接收者邮箱和模板类型为必填项。"
@@ -240,10 +242,10 @@ def send_or_schedule_email(action: str, receiver_selection: str, template_choice
 
     fields = TEMPLATES_METADATA.get(template_key, {}).get("fields", [])
     template_data = {}
-    components_per_field = 3 
+    # components_per_field = 3 
     
-    fields = TEMPLATES_METADATA.get(template_key, {}).get("fields", [])
-    template_data = {}
+    # fields = TEMPLATES_METADATA.get(template_key, {}).get("fields", [])
+    # template_data = {}
     
     # 每个字段在UI上对应2个输入组件（一个Textbox，一个Number），它们的值
     # 按顺序被收集到 dynamic_field_values 中。
@@ -276,6 +278,7 @@ def send_or_schedule_email(action: str, receiver_selection: str, template_choice
         "receiver_email": receiver_email,
         "template_type": template_key,
         "template_data": template_data,
+        "custom_subject": custom_subject # 新增
     }
     
     url = ""
@@ -307,9 +310,10 @@ def handle_schedule_cron(
     subscriber_list: list, 
     custom_emails_str: str, 
     template_choice: str, 
+    custom_subject: str, # 新增
     *dynamic_field_values
 ):
-    """【新增】处理创建周期性任务的逻辑"""
+    """【修改】新增 custom_subject 参数"""
     if not all([job_name, cron_string, template_choice]):
         gr.Warning("任务名称, Cron表达式 和 邮件模板为必填项。")
         return "操作失败：请填写所有必填项。"
@@ -348,6 +352,7 @@ def handle_schedule_cron(
         "receiver_emails": all_receiver_emails,
         "template_type": template_key,
         "template_data": template_data,
+        "custom_subject": custom_subject # 新增
     }
 
     try:
@@ -387,9 +392,11 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
         # 【修改2】调整标题，因为接收人选择框已移至外部
         gr.Markdown("### 2. 选择邮件模板")
         load_status = gr.Markdown()
-        with gr.Row():
-            template_dropdown = gr.Dropdown(label="选择邮件模板", choices=["正在加载..."], interactive=False, scale=2)
+        template_dropdown = gr.Dropdown(label="选择邮件模板", choices=["正在加载..."], interactive=False)
         
+        # 【新增】自定义标题输入框
+        custom_subject_input = gr.Textbox(label="自定义邮件标题 (可选)", info="留空则使用模板默认标题", placeholder="例如：这是一封特别的邮件")
+
         gr.Markdown("### 3. 填写模板所需信息")
         dynamic_fields_components = []
         with gr.Column() as dynamic_form_area:
@@ -458,10 +465,12 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
         output_text = gr.Textbox(label="操作结果", interactive=False)
         action_button.click(
             fn=send_or_schedule_email,
-            inputs=[action_type, receiver_dropdown, template_dropdown, send_at_component] + all_field_inputs,
+            # 【修改】在 inputs 列表中添加 custom_subject_input
+            inputs=[action_type, receiver_dropdown, template_dropdown, custom_subject_input, send_at_component] + all_field_inputs,
             outputs=output_text
         )
-        return load_status, template_dropdown, action_button, all_field_outputs, toggle_template_fields
+        # 【修改】将 custom_subject_input 添加到返回值
+        return load_status, template_dropdown, custom_subject_input, action_button, all_field_outputs, toggle_template_fields
 
     with gr.Tabs() as tabs:
         # --- Tab 1: 订阅管理 ---
@@ -483,12 +492,12 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
                     clear_button = gr.Button("清空表单")
 
         with gr.TabItem("手动发送邮件") as tab_manual:
-            # 【修改3】移除原先用于放置独立输入框的布局，并将共享输入框传入表单创建函数
-            manual_load_status, manual_template_dropdown, manual_action_button, manual_all_field_outputs, manual_toggle_fn = create_email_form(is_scheduled=False, receiver_dropdown=shared_receiver_input)
+            # 【修改】接收新增的 custom_subject_input
+            manual_load_status, manual_template_dropdown, manual_custom_subject, manual_action_button, manual_all_field_outputs, manual_toggle_fn = create_email_form(is_scheduled=False, receiver_dropdown=shared_receiver_input)
         
         with gr.TabItem("定时单次任务") as tab_schedule:
-            # 【修改3】移除原先用于放置独立输入框的布局，并将共享输入框传入表单创建函数
-            schedule_load_status, schedule_template_dropdown, schedule_action_button, schedule_all_field_outputs, schedule_toggle_fn = create_email_form(is_scheduled=True, receiver_dropdown=shared_receiver_input)
+            # 【修改】接收新增的 custom_subject_input
+            schedule_load_status, schedule_template_dropdown, schedule_custom_subject, schedule_action_button, schedule_all_field_outputs, schedule_toggle_fn = create_email_form(is_scheduled=True, receiver_dropdown=shared_receiver_input)
         
         # --- 【新增】Tab 3: 计划周期任务 ---
         with gr.TabItem("计划周期任务", id="cron_tab") as tab_cron:
@@ -508,6 +517,8 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
                     gr.Markdown("### 3. 选择并填写邮件模板")
                     cron_load_status = gr.Markdown()
                     cron_template_dropdown = gr.Dropdown(label="选择邮件模板", choices=["正在加载..."], interactive=False)
+                    # 【新增】周期任务的自定义标题输入框
+                    cron_custom_subject = gr.Textbox(label="自定义邮件标题 (可选)", info="留空则使用模板默认标题", placeholder="例如：每周项目进展同步")
                     cron_form_description = gr.Markdown()
 
                     cron_dynamic_fields_components = []
@@ -543,14 +554,14 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
                             if i < len(fields):
                                 field = fields[i]
                                 field_type = field.get("type", "text")
-                                updates.append(gr.update(visible=True)) # Group
+                                updates.append(gr.update(visible=True))
                                 if field_type == "number":
-                                    updates.append(gr.update(visible=False)) # Hide Textbox
-                                    updates.append(gr.update(visible=True, label=field.get('label'), value=field.get('default'))) # Show Number
-                                else: # text or textarea
+                                    updates.append(gr.update(visible=False))
+                                    updates.append(gr.update(visible=True, label=field.get('label'), value=field.get('default')))
+                                else:
                                     lines = 3 if field_type == "textarea" else 1
-                                    updates.append(gr.update(visible=True, label=field.get('label'), value=field.get('default'), lines=lines)) # Show Textbox
-                                    updates.append(gr.update(visible=False)) # Hide Number
+                                    updates.append(gr.update(visible=True, label=field.get('label'), value=field.get('default'), lines=lines))
+                                    updates.append(gr.update(visible=False))
                             else:
                                 updates.extend([gr.update(visible=False)] * 3)
                         return updates
@@ -633,7 +644,8 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
     # 【新增】周期任务创建按钮事件
     create_cron_button.click(
         fn=handle_schedule_cron,
-        inputs=[cron_job_name, cron_expression, cron_receiver_subscribers, cron_receiver_custom, cron_template_dropdown] + cron_all_field_inputs,
+        # 【修改】在 inputs 列表中添加 cron_custom_subject
+        inputs=[cron_job_name, cron_expression, cron_receiver_subscribers, cron_receiver_custom, cron_template_dropdown, cron_custom_subject] + cron_all_field_inputs,
         outputs=cron_output_text
     ).then(
         fn=lambda: gr.update(selected=tab_jobs.id), outputs=tabs
