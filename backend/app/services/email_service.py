@@ -50,7 +50,7 @@ class EmailService:
             # 【修改点】核心修复逻辑：专门处理邮件已发送但连接关闭时产生的特定错误
             # 这个错误是 smtplib 在某些 SMTP 服务器（如QQ）上可能遇到的非标准行为
             # 它的特征是一个元组 (-1, b'\x00\x00\x00')
-            if isinstance(e, tuple) and e == (-1, b'\x00\x00\x00'):
+            if isinstance(e, tuple) and e == "(-1, b'\x00\x00\x00')":
                 # 因为邮件实际上已经发送成功，我们在这里将状态报告为成功
                 # 并打印一条警告信息，而不是错误信息
                 print(f"邮件已通过 [{sender_email}] 成功发送至 [{receiver_email}]。(连接关闭时出现非致命错误，可安全忽略)")
