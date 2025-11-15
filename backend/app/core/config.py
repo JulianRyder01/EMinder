@@ -36,5 +36,12 @@ class Settings:
     # 定时任务配置
     DAILY_SUMMARY_CRON: str = os.getenv("DAILY_SUMMARY_CRON", "0 8 * * *")
 
+    # --- 【新增】大模型工作流配置 ---
+    # 从环境变量中读取 DeepSeek API 的 Key 和 Endpoint
+    # 如果 API Key 未设置，其值为 None
+    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY")
+    DEEPSEEK_API_ENDPOINT: str = os.getenv("DEEPSEEK_API_ENDPOINT", "https://api.deepseek.com")
+
+
 # 创建一个全局配置实例
 settings = Settings()
