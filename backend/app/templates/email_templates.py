@@ -73,10 +73,16 @@ class TemplateManager:
             if 'custom_templates' in locals() or 'custom_templates' in globals():
                 for key, template_data in custom_templates.items():
                     self._templates_metadata[key] = template_data["meta"]
-                    self._template_functions[key] = template_data["func"]
-                print(f"✅ 成功加载 {len(custom_templates)} 个自定义模板！")
+                    
+                    original_func = template_data["func"]
+                    
+                    # 我们不再直接存储原始函数，而是创建一个新的、被包装过的函数。
+                    # functools.partial 会创建一个新函数，该函数在被调用时，
+                    # 会自动先调用 self._apply_base_template，并将原始函数作为第一个参数传入。
+                    self._template_functions[key] = functools.partial(self._apply_base_template, original_func)
+                    
+                print(f"✅ 成功加载并自动包装 {len(custom_templates)} 个自定义模板！")
         except NameError:
-            # 如果文件不存在或未导入，则静默处理
             pass
         # =============================================================================
 
@@ -88,6 +94,21 @@ class TemplateManager:
         """返回所有模板的元数据"""
         return self._templates_metadata
 
+    # 统一的模板包装辅助方法 
+    def _apply_base_template(self, original_function, data: dict) -> dict:
+        """
+        执行一个原始模板函数，并将其输出用基础HTML样式进行包装。
+        """
+        # 1. 调用用户定义的原始函数 (例如 get_monthly_learning_report_template)
+        email_parts = original_function(data)
+        subject = email_parts.get("subject", "无主题")
+        raw_html = email_parts.get("html", "")
+        
+        # 2. 使用 get_base_html 进行包装，主题将作为邮件内容的标题
+        final_html = self.get_base_html(raw_html, subject)
+        
+        # 3. 返回与内置模板完全一致的最终结果
+        return {"subject": subject, "html": final_html}
     @staticmethod
     def get_base_html(content: str, title: str) -> str:
         """提供一个更美观、响应式的邮件样式容器"""
