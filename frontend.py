@@ -219,16 +219,35 @@ def send_or_schedule_email(action: str, receiver_selection: str, template_choice
     template_data = {}
     components_per_field = 3 
     
+    fields = TEMPLATES_METADATA.get(template_key, {}).get("fields", [])
+    template_data = {}
+    
+    # 每个字段在UI上对应2个输入组件（一个Textbox，一个Number），它们的值
+    # 按顺序被收集到 dynamic_field_values 中。
+    # 值的顺序是：(text_comp_0_val, num_comp_0_val, text_comp_1_val, num_comp_1_val, ...)
+    components_per_field = 2
+
+    # 我们遍历模板元数据中定义的字段 (fields)，
+    # 这样可以确保我们只处理当前模板需要的字段。
     for i, field in enumerate(fields):
-        field_type = field.get("type", "text")
+        # 计算当前字段对应的两个组件值在元组中的起始索引
         base_index = i * components_per_field
-        if field_type == "textarea":
-            value_index = base_index + 0
-        elif field_type == "number":
-            value_index = base_index + 1
-        else:
-            value_index = base_index + 2
-        template_data[field["name"]] = dynamic_field_values[value_index]
+        
+        field_name = field["name"]
+        field_type = field.get("type", "text")
+
+        # 根据字段类型，从正确的位置提取值
+        if field_type == "number":
+            # 如果字段类型是 'number'，我们取 Number 组件的值。
+            # 它的索引是 base_index + 1。
+            value = dynamic_field_values[base_index + 1]
+        else: # 'text' or 'textarea'
+            # 否则，我们取 Textbox 组件的值。
+            # 它的索引是 base_index + 0。
+            value = dynamic_field_values[base_index]
+        
+        # 将字段名和正确的值关联起来
+        template_data[field_name] = value
 
     payload = {
         "receiver_email": receiver_email,

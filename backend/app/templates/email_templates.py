@@ -1,5 +1,5 @@
 # backend/app/templates/email_templates.py (已修改)
-
+import functools
 import datetime
 
 try:
