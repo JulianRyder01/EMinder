@@ -3,6 +3,7 @@ from fastapi import APIRouter, Request, BackgroundTasks, HTTPException, Body
 from typing import Dict
 from croniter import croniter  # 新增导入
 import uuid  # 新增导入
+import asyncio # 新增导入
 # 【修改点】导入重命名后的 sqlite_store
 from ..storage.sqlite_store import store
 from ..services.scheduler_service import scheduler_service
@@ -101,11 +102,15 @@ async def send_email_now(request: Request, background_tasks: BackgroundTasks):
     if not template_func:
         raise HTTPException(status_code=404, detail=f"模板 '{template_type}' 未找到。")
     
-    email_content = template_func(template_data)
+    # 【异步修复】由于模板函数可能为异步（例如调用大模型），这里必须 await
+    # TemplateManager 的包装器确保了所有模板都可以被 await
+    email_content = await template_func(template_data)
     
     # 【修改】决定最终使用的标题
     final_subject = custom_subject if custom_subject else email_content["subject"]
     
+    # 注意：虽然 send_email 是异步的，但 BackgroundTasks 会在后台处理它，
+    # 这里的 add_task 调用本身是同步的，所以不需要 await。
     background_tasks.add_task(
         email_service.send_email,
         receiver_email,
@@ -146,7 +151,7 @@ async def schedule_email_once(request: Request):
 
     # 【修改】将 custom_subject 添加到传递给任务的参数列表中
     job = scheduler_service.scheduler.add_job(
-        scheduler_service.send_single_email_task,
+        scheduler_service.send_single_email_task, # 这个任务函数已经是 async 的
         trigger='date',
         run_date=aware_dt,
         args=[receiver_email, template_type, template_data, custom_subject],

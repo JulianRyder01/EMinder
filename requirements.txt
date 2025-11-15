@@ -8,3 +8,4 @@ gunicorn
 python-multipart
 huggingface_hub==0.20.3
 croniter
+aiosmtplib==4.0.2

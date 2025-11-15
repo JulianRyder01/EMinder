@@ -1,6 +1,7 @@
 # backend/app/templates/email_templates.py (已修改)
 import functools
 import datetime
+import asyncio # 导入 asyncio 模块
 
 try:
     from .customize_templates import custom_templates
@@ -94,13 +95,20 @@ class TemplateManager:
         """返回所有模板的元数据"""
         return self._templates_metadata
 
-    # 统一的模板包装辅助方法 
-    def _apply_base_template(self, original_function, data: dict) -> dict:
+    # 【异步修复】统一的模板包装辅助方法 
+    async def _apply_base_template(self, original_function, data: dict) -> dict:
         """
-        执行一个原始模板函数，并将其输出用基础HTML样式进行包装。
+        【异步改造】执行一个原始模板函数，并将其输出用基础HTML样式进行包装。
+        此函数现在是异步的，可以处理同步和异步的原始模板函数。
         """
-        # 1. 调用用户定义的原始函数 (例如 get_monthly_learning_report_template)
-        email_parts = original_function(data)
+        # 1. 检查原始函数是否为协程函数，并相应地调用它
+        if asyncio.iscoroutinefunction(original_function):
+            # 如果是 async def 函数, 就 await 它
+            email_parts = await original_function(data)
+        else:
+            # 如果是普通 def 函数, 就直接调用
+            email_parts = original_function(data)
+        
         subject = email_parts.get("subject", "无主题")
         raw_html = email_parts.get("html", "")
         

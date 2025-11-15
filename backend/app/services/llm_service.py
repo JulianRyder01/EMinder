@@ -1,6 +1,6 @@
 # backend/app/services/llm_service.py (新文件)
 
-import requests
+import httpx # 导入异步 HTTP 客户端库
 from ..core.config import settings
 
 class LLMService:
@@ -18,9 +18,10 @@ class LLMService:
             # 仅在服务初始化时打印警告，而不是中止整个应用
             print("警告: DEEPSEEK_API_KEY 未在 .env 文件中配置。大模型相关功能将不可用。")
 
-    def process_text_with_deepseek(self, text_ori: str) -> dict:
+    async def process_text_with_deepseek(self, text_ori: str) -> dict:
         """
-        使用 DeepSeek API 处理输入文本。
+        【异步改造】使用 DeepSeek API 处理输入文本。
+        使用 httpx 实现非阻塞的 API 请求。
 
         :param text_ori: 原始输入文本。
         :return: 一个包含处理结果或错误信息的字典。
@@ -49,13 +50,14 @@ class LLMService:
         }
 
         try:
-            # 发送 POST 请求到 DeepSeek API
-            response = requests.post(
-                f"{self.api_endpoint}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=self.request_timeout
-            )
+            # 使用 httpx.AsyncClient 发送异步 POST 请求
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.api_endpoint}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=self.request_timeout
+                )
             
             # 检查 HTTP 响应状态码，如果不是 2xx 则抛出异常
             response.raise_for_status()
@@ -63,10 +65,8 @@ class LLMService:
             response_data = response.json()
             
             # 健壮地解析响应内容
-            # 检查 'choices' 列表是否存在且不为空
             if "choices" in response_data and response_data["choices"]:
                 first_choice = response_data["choices"][0]
-                # 检查 'message' 和 'content' 是否存在
                 if "message" in first_choice and "content" in first_choice["message"]:
                     processed_content = first_choice["message"]["content"]
                     return {"success": True, "content": processed_content}
@@ -76,11 +76,10 @@ class LLMService:
             print(error_message)
             return {"success": False, "content": error_message}
 
-        except requests.exceptions.HTTPError as http_err:
-            # 处理 HTTP 错误，例如 401 (认证失败), 429 (速率限制), 500 (服务器错误)
-            error_details = f"HTTP 错误: {http_err.response.status_code} {http_err.response.reason}"
+        except httpx.HTTPStatusError as http_err:
+            # 处理 HTTP 错误，例如 401, 429, 500
+            error_details = f"HTTP 错误: {http_err.response.status_code} {http_err.response.reason_phrase}"
             try:
-                # 尝试解析 API 返回的详细错误信息
                 api_error = http_err.response.json().get("error", {}).get("message", "无详细信息")
                 error_details += f"\nAPI 错误信息: {api_error}"
             except Exception:
@@ -88,7 +87,7 @@ class LLMService:
             print(error_details)
             return {"success": False, "content": error_details}
 
-        except requests.exceptions.RequestException as req_err:
+        except httpx.RequestError as req_err:
             # 处理网络相关的错误，例如连接超时、DNS错误
             error_message = f"网络请求失败: 无法连接到 DeepSeek API。请检查网络连接或 API 端点配置。错误详情: {req_err}"
             print(error_message)

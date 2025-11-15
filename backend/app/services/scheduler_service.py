@@ -1,5 +1,6 @@
 # backend/app/services/scheduler_service.py (已修正序列化错误)
 import datetime
+import asyncio
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from croniter import croniter  # 需要安装: pip install croniter
@@ -13,8 +14,8 @@ from ..storage.sqlite_store import store
 # 这样做是为了解决 APScheduler 的序列化问题。当任务被持久化到数据库时，
 # APScheduler 无法序列化一个包含调度器实例的对象 (self)。
 # 将其作为普通函数，就不再有关联的 self 对象，问题迎刃而解。
-def _send_recurring_emails_task():
-    """扫描订阅者并发送相应模板的邮件。这是一个独立的函数，用于周期性任务。"""
+async def _send_recurring_emails_task():
+    """【异步改造】扫描订阅者并发送相应模板的邮件。这是一个独立的函数，用于周期性任务。"""
     print(f"\n[{datetime.datetime.now()}] --- 开始执行定时邮件发送任务 ---")
     active_subscribers = store.get_active_subscribers()
 
@@ -22,6 +23,7 @@ def _send_recurring_emails_task():
         print("没有活跃的订阅者，本次任务结束。")
         return
 
+    tasks = []
     for sub in active_subscribers:
         email = sub["email"]
         template_type = sub.get("template_type", "daily_summary")
@@ -38,23 +40,34 @@ def _send_recurring_emails_task():
         template_func = getattr(template_manager, template_type, None)
         
         if template_func:
-            email_content = template_func(mock_data)
-            email_service.send_email(
+            # 检查模板函数是否为异步
+            if asyncio.iscoroutinefunction(template_func):
+                email_content = await template_func(mock_data)
+            else:
+                email_content = template_func(mock_data)
+
+            # 创建异步发送任务
+            task = email_service.send_email(
                 receiver_email=email,
                 subject=email_content["subject"],
                 html_content=email_content["html"]
             )
+            tasks.append(task)
         else:
             print(f"警告：未找到名为 '{template_type}' 的邮件模板，无法为 {email} 发送。")
+    
+    # 并发执行所有邮件发送任务
+    if tasks:
+        await asyncio.gather(*tasks)
     
     print("--- 定时邮件发送任务执行完毕 ---\n")
 
 
 # --- 【新增】用于执行自定义周期性任务的顶级函数 ---
 # 同样是为了解决 APScheduler 的序列化问题
-def _send_custom_cron_email_task(receiver_emails: list[str], template_type: str, data: dict, custom_subject: str = None):
+async def _send_custom_cron_email_task(receiver_emails: list[str], template_type: str, data: dict, custom_subject: str = None):
     """
-    根据指定的参数，向一个邮件列表发送模板邮件。
+    【异步改造】根据指定的参数，向一个邮件列表发送模板邮件。
     这是一个独立的函数，用于用户自定义的周期性任务。
     【新增】增加了 custom_subject 参数。
     """
@@ -69,18 +82,29 @@ def _send_custom_cron_email_task(receiver_emails: list[str], template_type: str,
         print(f"警告：在执行自定义周期任务时，未找到模板 '{template_type}'。")
         return
 
-    email_content = template_func(data)
+    # 检查模板函数是否为异步
+    if asyncio.iscoroutinefunction(template_func):
+        email_content = await template_func(data)
+    else:
+        email_content = template_func(data)
     
     # 【修改】如果提供了自定义标题，则使用它；否则，使用模板的默认标题。
     final_subject = custom_subject if custom_subject else email_content["subject"]
     
     print(f"准备向 {len(receiver_emails)} 位接收者发送邮件 (标题: '{final_subject}'): {', '.join(receiver_emails)}")
+    
+    tasks = []
     for email in receiver_emails:
-        email_service.send_email(
+        task = email_service.send_email(
             receiver_email=email,
             subject=final_subject,
             html_content=email_content["html"]
         )
+        tasks.append(task)
+        
+    # 并发执行所有邮件发送任务
+    if tasks:
+        await asyncio.gather(*tasks)
     
     print("--- 自定义周期任务执行完毕 ---\n")
 
@@ -91,26 +115,32 @@ class SchedulerService:
         jobstores = {
             'default': SQLAlchemyJobStore(url=settings.DATABASE_URL)
         }
+        # BackgroundScheduler 同样支持调度异步任务
         self.scheduler = BackgroundScheduler(jobstores=jobstores, timezone="Asia/Taipei")
 
     # 【修改点】原有的 _send_scheduled_emails 实例方法已被上面的顶级函数替代，故删除。
 
     @staticmethod
-    def send_single_email_task(receiver_email: str, template_type: str, data: dict, custom_subject: str = None):
+    async def send_single_email_task(receiver_email: str, template_type: str, data: dict, custom_subject: str = None):
         """
-        这是一个静态方法，专门被 APScheduler 调用来执行一次性任务。
+        【异步改造】这是一个静态方法，专门被 APScheduler 调用来执行一次性任务。
         它不依赖 SchedulerService 实例的状态，因此可以被安全地序列化。
         【新增】增加了 custom_subject 参数。
         """
         print(f"执行一次性任务：向 {receiver_email} 发送 '{template_type}' 模板邮件。")
         template_func = getattr(template_manager, template_type, None)
         if template_func:
-            email_content = template_func(data)
+            # 检查模板函数是否为异步
+            if asyncio.iscoroutinefunction(template_func):
+                email_content = await template_func(data)
+            else:
+                email_content = template_func(data)
             
             # 【修改】如果提供了自定义标题，则使用它；否则，使用模板的默认标题。
             final_subject = custom_subject if custom_subject else email_content["subject"]
             
-            email_service.send_email(
+            # 直接 await 异步发送邮件
+            await email_service.send_email(
                 receiver_email,
                 final_subject,
                 email_content["html"]
@@ -137,6 +167,7 @@ class SchedulerService:
             'day_of_week': parts[4]
         }
         
+        # add_job 会自动检测到 _send_custom_cron_email_task 是协程并正确地执行它
         job = self.scheduler.add_job(
             _send_custom_cron_email_task,
             'cron',
@@ -151,6 +182,7 @@ class SchedulerService:
             
     def start(self):
         """添加任务并启动调度器"""
+        # add_job 会自动检测到 _send_recurring_emails_task 是协程并正确地执行它
         self.scheduler.add_job(
             # 【核心修正点】这里调用的目标是上面定义的顶级函数，而不是 self._send_scheduled_emails
             _send_recurring_emails_task,

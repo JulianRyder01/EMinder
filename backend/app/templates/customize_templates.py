@@ -29,6 +29,7 @@
     - 每个模板都需要一个函数，用来接收用户在前端填写的数据，并生成最终的邮件 HTML 内容。
     - 函数必须接收一个名为 `data` 的字典作为参数。
     - 函数必须返回一个字典，包含 `subject` (邮件主题) 和 `html` (邮件内容)。
+    - 【异步注意】: 如果你的模板函数需要执行 I/O 操作 (如 API 请求)，请将其定义为 `async def`。
 
  3. 注册你的模板:
     - 将你创建的元数据字典和模板生成函数组合在一起，形成一个完整的模板信息。
@@ -145,8 +146,8 @@ deepseek_workflow_meta = {
 }
 
 # --- 步骤 2: 编写模板生成函数 ---
-def get_deepseek_workflow_template(data: dict) -> dict:
-    """调用 LLM 服务处理文本，并生成邮件内容"""
+async def get_deepseek_workflow_template(data: dict) -> dict:
+    """【异步改造】调用 LLM 服务处理文本，并生成邮件内容"""
     
     text_to_process = data.get('text_ori', '').strip()
     
@@ -156,8 +157,8 @@ def get_deepseek_workflow_template(data: dict) -> dict:
             "html": "<h4>错误</h4><p>您没有提供任何需要处理的文本内容。</p>"
         }
     
-    # 调用 LLM 服务
-    result = llm_service.process_text_with_deepseek(text_to_process)
+    # 【异步改造】调用异步的 LLM 服务
+    result = await llm_service.process_text_with_deepseek(text_to_process)
     
     if result["success"]:
         # 处理成功
