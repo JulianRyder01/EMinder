@@ -16,6 +16,7 @@ TEMPLATES_INFO_URL = f"{API_BASE_URL}/templates/info"
 SUBSCRIBERS_URL = f"{API_BASE_URL}/subscribers"
 SEND_NOW_URL = f"{API_BASE_URL}/send-now"
 SCHEDULE_ONCE_URL = f"{API_BASE_URL}/schedule-once"
+SCHEDULE_CRON_URL = f"{API_BASE_URL}/schedule-cron" # 【新增】
 JOBS_URL = f"{API_BASE_URL}/jobs" 
 # 【修改点】新增获取订阅者列表的 API 地址
 SUBSCRIBERS_URL = f"{API_BASE_URL}/subscribers"
@@ -29,7 +30,7 @@ SUBSCRIBER_CHOICES = []
 # --- API 调用函数 ---
 
 def refresh_subscribers_list():
-    """【修改】获取订阅者列表，并更新DataFrame和全局选择列表"""
+    """【修改】获取订阅者列表，并更新DataFrame和所有相关的选择组件"""
     global SUBSCRIBER_CHOICES
     try:
         response = requests.get(SUBSCRIBERS_URL)
@@ -40,17 +41,20 @@ def refresh_subscribers_list():
         SUBSCRIBER_CHOICES = [f"{s.get('remark_name', s['email'])} <{s['email']}>" for s in subs]
         
         if not subs:
-            return pd.DataFrame(columns=["邮箱地址", "备注名"]), "✅ 暂无订阅者。", gr.update(choices=[], value=None)
+            # 【修改】返回4个更新，确保所有组件状态一致
+            return pd.DataFrame(columns=["邮箱地址", "备注名"]), "✅ 暂无订阅者。", gr.update(choices=[], value=None), gr.update(choices=[], value=None)
         
         df = pd.DataFrame(subs, columns=["email", "remark_name"])
         df.rename(columns={"email": "邮箱地址", "remark_name": "备注名"}, inplace=True)
         
         msg = f"✅ 订阅列表已于 {datetime.datetime.now().strftime('%H:%M:%S')} 刷新。"
-        return df, msg, gr.update(choices=SUBSCRIBER_CHOICES, value=None)
+        # 【修改】返回4个更新：DataFrame, 状态消息, Dropdown, CheckboxGroup
+        return df, msg, gr.update(choices=SUBSCRIBER_CHOICES, value=None), gr.update(choices=SUBSCRIBER_CHOICES, value=None)
     except requests.RequestException as e:
         msg = f"🔴 获取订阅列表失败: {e}"
         gr.Warning(msg)
-        return pd.DataFrame(columns=["邮箱地址", "备注名"]), msg, gr.update(choices=[], value=None)
+        # 【修改】确保在失败时也返回4个值
+        return pd.DataFrame(columns=["邮箱地址", "备注名"]), msg, gr.update(choices=[], value=None), gr.update(choices=[], value=None)
 
 def handle_add_subscriber(email, remark_name):
     """处理添加或更新订阅者的逻辑"""
@@ -112,7 +116,17 @@ def get_email_from_selection(selection: str) -> str:
     # 如果没有匹配到，说明是用户手动输入的
     return selection
 
-# 其他API函数（get_jobs_list, cancel_job_by_id 等）保持不变...
+def get_emails_from_selection_list(selections: list[str]) -> list[str]:
+    """【新增】从多选框的选择列表中提取纯邮箱地址"""
+    if not selections:
+        return []
+    emails = []
+    for selection in selections:
+        match = re.search(r'<(.*?)>', selection)
+        if match:
+            emails.append(match.group(1))
+    return emails
+
 def get_jobs_list():
     """从后端获取所有计划任务列表并格式化"""
     try:
@@ -124,9 +138,18 @@ def get_jobs_list():
             formatted_data = []
             for job in jobs:
                 # 兼容周期性任务和一次性任务的参数结构
-                receiver = "所有已订阅用户"
-                if job.get('args') and len(job['args']) > 0:
-                    receiver = job['args'][0]
+                receiver = "查看任务参数" # 默认值
+                if job.get('args'):
+                    if job.get('name', '').startswith('One-time'):
+                         receiver = job['args'][0] # 单次任务
+                    elif job.get('name', '').startswith('每日总结'):
+                        receiver = "所有已订阅用户"
+                    else:
+                        # 自定义周期任务
+                        if isinstance(job['args'][0], list):
+                            receiver = f"{len(job['args'][0])}个用户"
+                        else:
+                            receiver = job['args'][0]
 
                 run_time = "N/A"
                 if job['next_run_time']:
@@ -278,6 +301,75 @@ def send_or_schedule_email(action: str, receiver_selection: str, template_choice
     except Exception as e:
         return f"发生未知异常: {e}"
 
+def handle_schedule_cron(
+    job_name: str, 
+    cron_string: str, 
+    subscriber_list: list, 
+    custom_emails_str: str, 
+    template_choice: str, 
+    *dynamic_field_values
+):
+    """【新增】处理创建周期性任务的逻辑"""
+    if not all([job_name, cron_string, template_choice]):
+        gr.Warning("任务名称, Cron表达式 和 邮件模板为必填项。")
+        return "操作失败：请填写所有必填项。"
+    
+    subscriber_emails = get_emails_from_selection_list(subscriber_list)
+    custom_emails = [email.strip() for email in custom_emails_str.split(',') if email.strip() and "@" in email.strip()]
+    
+    all_receiver_emails = sorted(list(set(subscriber_emails + custom_emails)))
+    
+    if not all_receiver_emails:
+        gr.Warning("接收者邮箱列表为空！")
+        return "操作失败：必须至少指定一个有效的接收者邮箱。"
+        
+    template_key = get_template_key_from_display_name(template_choice)
+    if not template_key:
+        return "错误：无效的模板选择。"
+
+    fields = TEMPLATES_METADATA.get(template_key, {}).get("fields", [])
+    template_data = {}
+    components_per_field = 2
+
+    for i, field in enumerate(fields):
+        base_index = i * components_per_field
+        field_name = field["name"]
+        field_type = field.get("type", "text")
+
+        if field_type == "number":
+            value = dynamic_field_values[base_index + 1]
+        else:
+            value = dynamic_field_values[base_index]
+        template_data[field_name] = value
+
+    payload = {
+        "job_name": job_name,
+        "cron_string": cron_string,
+        "receiver_emails": all_receiver_emails,
+        "template_type": template_key,
+        "template_data": template_data,
+    }
+
+    try:
+        response = requests.post(SCHEDULE_CRON_URL, json=payload)
+        response.raise_for_status()
+        gr.Info("周期任务已成功调度！将自动刷新任务列表。")
+        return response.json().get("message", "操作成功！")
+    except requests.exceptions.HTTPError as e:
+        error_detail = "未知错误"
+        try:
+            error_detail = e.response.json().get('detail', e.response.text)
+        except Exception:
+            pass
+        gr.Error(f"操作失败: {error_detail}")
+        return f"操作失败: {error_detail}"
+    except requests.ConnectionError:
+        gr.Error("无法连接到后端服务。")
+        return "错误：无法连接到后端服务。"
+    except Exception as e:
+        gr.Error(f"发生未知异常: {e}")
+        return f"发生未知异常: {e}"
+
 # --- Gradio 界面构建 ---
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), title="EMinder 控制中心") as demo:
@@ -286,7 +378,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
 
     # 【修改1】将两个独立的接收者输入框合并为一个共享组件，并放置在 Tabs 的外部，使其对两个 Tab 可见
     shared_receiver_input = gr.Dropdown(
-        label="1. 选择或输入接收者邮箱 (适用于下方所有邮件操作)",
+        label="1. 选择或输入接收者邮箱 (适用于'手动发送'和'定时单次任务')",
         allow_custom_value=True,
         interactive=True
     )
@@ -397,6 +489,82 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
         with gr.TabItem("定时单次任务") as tab_schedule:
             # 【修改3】移除原先用于放置独立输入框的布局，并将共享输入框传入表单创建函数
             schedule_load_status, schedule_template_dropdown, schedule_action_button, schedule_all_field_outputs, schedule_toggle_fn = create_email_form(is_scheduled=True, receiver_dropdown=shared_receiver_input)
+        
+        # --- 【新增】Tab 3: 计划周期任务 ---
+        with gr.TabItem("计划周期任务", id="cron_tab") as tab_cron:
+            gr.Markdown("## 创建周期性邮件发送任务")
+            gr.Markdown("通过 [Cron 表达式](https://crontab.guru/) 定义一个重复执行的计划，例如在每个周一上午9点向指定用户发送周报。")
+            with gr.Row():
+                with gr.Column(scale=2):
+                    gr.Markdown("### 1. 定义任务属性")
+                    cron_job_name = gr.Textbox(label="任务名称", placeholder="例如：项目组每周一九点周报")
+                    cron_expression = gr.Textbox(label="Cron 表达式", placeholder="分 时 日 月 周 (例如: 0 9 * * 1)")
+                    
+                    gr.Markdown("### 2. 选择接收者")
+                    cron_receiver_subscribers = gr.CheckboxGroup(label="从订阅列表中选择 (可多选)")
+                    cron_receiver_custom = gr.Textbox(label="添加自定义邮箱", placeholder="多个邮箱请用英文逗号 , 分隔", info="可随时添加不在订阅列表中的临时邮箱。")
+
+                with gr.Column(scale=3):
+                    gr.Markdown("### 3. 选择并填写邮件模板")
+                    cron_load_status = gr.Markdown()
+                    cron_template_dropdown = gr.Dropdown(label="选择邮件模板", choices=["正在加载..."], interactive=False)
+                    cron_form_description = gr.Markdown()
+
+                    cron_dynamic_fields_components = []
+                    with gr.Column() as cron_dynamic_form_area:
+                        max_fields = 10
+                        for i in range(max_fields):
+                            with gr.Group(visible=False) as field_group:
+                                comp_text = gr.Textbox(label=f"字段{i+1}")
+                                comp_num = gr.Number(label=f"字段{i+1}", visible=False)
+                            cron_dynamic_fields_components.append({"group": field_group, "text": comp_text, "number": comp_num})
+                    
+                    cron_all_field_inputs = []
+                    for comp_dict in cron_dynamic_fields_components:
+                        cron_all_field_inputs.extend([comp_dict['text'], comp_dict['number']])
+
+                    cron_all_field_outputs = [cron_dynamic_form_area, cron_form_description]
+                    for comp_dict in cron_dynamic_fields_components:
+                        cron_all_field_outputs.extend([comp_dict['group'], comp_dict['text'], comp_dict['number']])
+
+                    # 注意: 此函数与 create_email_form 中的 toggle_template_fields 逻辑相同
+                    def toggle_cron_template_fields(choice):
+                        updates = []
+                        template_key = get_template_key_from_display_name(choice)
+                        if not template_key:
+                            return [gr.update(visible=False)] * len(cron_all_field_outputs)
+                        
+                        meta = TEMPLATES_METADATA[template_key]
+                        fields = meta.get("fields", [])
+                        updates.append(gr.update(visible=True))
+                        updates.append(gr.update(value=f"#### {meta.get('description', '')}"))
+
+                        for i in range(max_fields):
+                            if i < len(fields):
+                                field = fields[i]
+                                field_type = field.get("type", "text")
+                                updates.append(gr.update(visible=True)) # Group
+                                if field_type == "number":
+                                    updates.append(gr.update(visible=False)) # Hide Textbox
+                                    updates.append(gr.update(visible=True, label=field.get('label'), value=field.get('default'))) # Show Number
+                                else: # text or textarea
+                                    lines = 3 if field_type == "textarea" else 1
+                                    updates.append(gr.update(visible=True, label=field.get('label'), value=field.get('default'), lines=lines)) # Show Textbox
+                                    updates.append(gr.update(visible=False)) # Hide Number
+                            else:
+                                updates.extend([gr.update(visible=False)] * 3)
+                        return updates
+
+                    cron_template_dropdown.change(
+                        fn=toggle_cron_template_fields,
+                        inputs=cron_template_dropdown,
+                        outputs=cron_all_field_outputs
+                    )
+
+            gr.Markdown("### 4. 创建任务")
+            with gr.Row():
+                create_cron_button = gr.Button("✔️ 创建周期任务", variant="primary")
+            cron_output_text = gr.Textbox(label="操作结果", interactive=False)
 
         with gr.TabItem("📅 计划任务管理", id="jobs_tab") as tab_jobs:
             gr.Markdown("## 查看并管理所有已计划的邮件任务")
@@ -421,7 +589,6 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
     # --- 事件绑定 ---
     
     # 订阅管理 Tab
-    # 【修正点 #2】修正 DataFrame select 事件的处理方式
     def on_select_subscriber(df: pd.DataFrame, evt: gr.SelectData):
         if evt.index is None: return "", ""
         row_index = evt.index[0]
@@ -431,33 +598,48 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
         return email, remark
     subscribers_dataframe.select(fn=on_select_subscriber, inputs=[subscribers_dataframe], outputs=[sub_email_input, sub_remark_input], trigger_mode='once')
     
+    # 【修改】将 cron_receiver_subscribers 添加到刷新列表
     add_button.click(fn=handle_add_subscriber, inputs=[sub_email_input, sub_remark_input]).then(
-        fn=refresh_subscribers_list, outputs=[subscribers_dataframe, subs_status_output, shared_receiver_input]
+        fn=refresh_subscribers_list, outputs=[subscribers_dataframe, subs_status_output, shared_receiver_input, cron_receiver_subscribers]
     )
     
     delete_button.click(fn=handle_delete_subscriber, inputs=[sub_email_input]).then(
-        fn=refresh_subscribers_list, outputs=[subscribers_dataframe, subs_status_output, shared_receiver_input]
+        fn=refresh_subscribers_list, outputs=[subscribers_dataframe, subs_status_output, shared_receiver_input, cron_receiver_subscribers]
     )
     
     def clear_inputs(): return "", ""
     clear_button.click(fn=clear_inputs, outputs=[sub_email_input, sub_remark_input])
 
     refresh_subs_button.click(
-        fn=refresh_subscribers_list, outputs=[subscribers_dataframe, subs_status_output, shared_receiver_input]
+        fn=refresh_subscribers_list, outputs=[subscribers_dataframe, subs_status_output, shared_receiver_input, cron_receiver_subscribers]
     )
 
     # 邮件发送 Tab
     demo.load(fn=load_templates_info, outputs=[manual_template_dropdown, manual_load_status]).then(fn=manual_toggle_fn, inputs=manual_template_dropdown, outputs=manual_all_field_outputs)
     demo.load(fn=load_templates_info, outputs=[schedule_template_dropdown, schedule_load_status]).then(fn=schedule_toggle_fn, inputs=schedule_template_dropdown, outputs=schedule_all_field_outputs)
+    demo.load(fn=load_templates_info, outputs=[cron_template_dropdown, cron_load_status]).then(fn=toggle_cron_template_fields, inputs=cron_template_dropdown, outputs=cron_all_field_outputs)
     
     # 全局加载
-    demo.load(fn=refresh_subscribers_list, outputs=[subscribers_dataframe, subs_status_output, shared_receiver_input])
+    demo.load(fn=refresh_subscribers_list, outputs=[subscribers_dataframe, subs_status_output, shared_receiver_input, cron_receiver_subscribers])
 
     # 计划任务 Tab
     tab_jobs.select(fn=get_jobs_list, outputs=[jobs_dataframe, jobs_status_output])
     refresh_jobs_button.click(fn=get_jobs_list, outputs=[jobs_dataframe, jobs_status_output])
     cancel_button.click(fn=cancel_job_by_id, inputs=[job_id_input], outputs=[cancel_status_output]).then(fn=get_jobs_list, outputs=[jobs_dataframe, jobs_status_output])
+    
+    # 【修改】为“定时单次任务”和“计划周期任务”的创建按钮添加跳转和刷新逻辑
     schedule_action_button.click(fn=lambda: gr.update(selected=tab_jobs.id), outputs=tabs).then(fn=get_jobs_list, outputs=[jobs_dataframe, jobs_status_output])
+
+    # 【新增】周期任务创建按钮事件
+    create_cron_button.click(
+        fn=handle_schedule_cron,
+        inputs=[cron_job_name, cron_expression, cron_receiver_subscribers, cron_receiver_custom, cron_template_dropdown] + cron_all_field_inputs,
+        outputs=cron_output_text
+    ).then(
+        fn=lambda: gr.update(selected=tab_jobs.id), outputs=tabs
+    ).then(
+        fn=get_jobs_list, outputs=[jobs_dataframe, jobs_status_output]
+    )
 
 
 if __name__ == "__main__":

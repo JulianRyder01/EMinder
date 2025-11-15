@@ -2,6 +2,7 @@
 import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from croniter import croniter  # 需要安装: pip install croniter
 from ..core.config import settings
 from .email_service import email_service
 from ..templates.email_templates import template_manager
@@ -49,6 +50,37 @@ def _send_recurring_emails_task():
     print("--- 定时邮件发送任务执行完毕 ---\n")
 
 
+# --- 【新增】用于执行自定义周期性任务的顶级函数 ---
+# 同样是为了解决 APScheduler 的序列化问题
+def _send_custom_cron_email_task(receiver_emails: list[str], template_type: str, data: dict):
+    """
+    根据指定的参数，向一个邮件列表发送模板邮件。
+    这是一个独立的函数，用于用户自定义的周期性任务。
+    """
+    print(f"\n[{datetime.datetime.now()}] --- 开始执行自定义周期任务: 发送 '{template_type}' ---")
+    
+    if not receiver_emails:
+        print("邮件接收者列表为空，本次任务结束。")
+        return
+        
+    template_func = getattr(template_manager, template_type, None)
+    if not template_func:
+        print(f"警告：在执行自定义周期任务时，未找到模板 '{template_type}'。")
+        return
+
+    email_content = template_func(data)
+    
+    print(f"准备向 {len(receiver_emails)} 位接收者发送邮件: {', '.join(receiver_emails)}")
+    for email in receiver_emails:
+        email_service.send_email(
+            receiver_email=email,
+            subject=email_content["subject"],
+            html_content=email_content["html"]
+        )
+    
+    print("--- 自定义周期任务执行完毕 ---\n")
+
+
 class SchedulerService:
     """管理所有后台定时任务"""
     def __init__(self):
@@ -76,6 +108,37 @@ class SchedulerService:
             )
         else:
             print(f"错误：在执行一次性任务时，未找到模板 '{template_type}'。")
+    
+    def add_cron_job(self, job_id: str, name: str, cron_string: str, args: list):
+        """
+        【新增】添加一个由 Cron 表达式定义的周期性任务。
+        """
+        if not croniter.is_valid(cron_string):
+            raise ValueError(f"无效的 Cron 表达式: '{cron_string}'")
+
+        parts = cron_string.split()
+        if len(parts) != 5:
+            raise ValueError("Cron 表达式必须包含5个部分 (分 时 日 月 周)。")
+        
+        cron_kwargs = {
+            'minute': parts[0],
+            'hour': parts[1],
+            'day': parts[2],
+            'month': parts[3],
+            'day_of_week': parts[4]
+        }
+        
+        job = self.scheduler.add_job(
+            _send_custom_cron_email_task,
+            'cron',
+            id=job_id,
+            name=name,
+            args=args,
+            replace_existing=True,
+            **cron_kwargs
+        )
+        print(f"已成功添加新的周期任务: [ID: {job.id}, Name: {name}, Cron: '{cron_string}']")
+        return job
             
     def start(self):
         """添加任务并启动调度器"""

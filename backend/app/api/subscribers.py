@@ -1,6 +1,8 @@
 # backend/app/api/subscribers.py (已修改)
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException, Body
 from typing import Dict
+from croniter import croniter  # 新增导入
+import uuid  # 新增导入
 # 【修改点】导入重命名后的 sqlite_store
 from ..storage.sqlite_store import store
 from ..services.scheduler_service import scheduler_service
@@ -150,3 +152,47 @@ async def schedule_email_once(request: Request):
         "message": f"任务已成功调度！邮件将在 {aware_dt.strftime('%Y-%m-%d %H:%M:%S %Z')} 发送至 {receiver_email}。",
         "job_id": job.id
     }
+
+@router.post("/schedule-cron")
+async def schedule_email_cron(request: Request):
+    """
+    【新增】通过 Cron 表达式调度一个周期性的邮件发送任务。
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="无效的 JSON 请求体。")
+
+    job_name = payload.get("job_name")
+    cron_string = payload.get("cron_string")
+    template_type = payload.get("template_type")
+    template_data = payload.get("template_data", {})
+    receiver_emails = payload.get("receiver_emails", [])
+
+    if not all([job_name, cron_string, template_type, receiver_emails]):
+        raise HTTPException(status_code=422, detail="请求体中缺少 'job_name', 'cron_string', 'template_type' 或 'receiver_emails'。")
+    
+    if not croniter.is_valid(cron_string):
+        raise HTTPException(status_code=422, detail="提供了无效的 Cron 表达式。")
+
+    # 生成一个唯一的 job_id
+    job_id = f"cron_{template_type}_{uuid.uuid4().hex[:8]}"
+    
+    try:
+        job = scheduler_service.add_cron_job(
+            job_id=job_id,
+            name=job_name,
+            cron_string=cron_string,
+            # 传递给 APScheduler 任务函数的参数
+            args=[receiver_emails, template_type, template_data]
+        )
+        return {
+            "status": "success",
+            "message": f"周期任务 '{job_name}' 已成功调度！",
+            "job_id": job.id
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        print(f"调度周期任务时发生错误: {e}")
+        raise HTTPException(status_code=500, detail=f"调度任务时发生内部错误: {str(e)}")
