@@ -1,0 +1,7 @@
+dirlist.py
+directory_listing_with_content.txt
+*.env
+__pycache__/
+*.db
+directory_listing_with_content.txt
+backend/eminder.db

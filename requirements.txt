@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+apscheduler
+requests
+gradio==4.44.1
+gunicorn
+python-multipart
+huggingface_hub==0.20.3
