@@ -239,7 +239,7 @@ def send_or_schedule_email(
     # 当 gr.File(type="filepath") 时，Gradio 返回的是一个字符串路径，而不是一个文件对象。
     # 因此，函数签名中的类型提示虽然是 gr.File，但实际接收到的 `attachment_file` 是 str。
     # 我们将直接使用这个字符串路径，而不是错误的 `attachment_file.name`。
-    attachment_file: str,
+    attachment_files_list: list,
     # ========================== END: BUG 修复 ============================
     *dynamic_field_values
 ):
@@ -289,12 +289,21 @@ def send_or_schedule_email(
     files = {}
     # ========================== START: BUG 修复 ==========================
     # DESIGNER'S NOTE:
-    # `attachment_file` 现在被正确地当作一个字符串路径来处理。
-    if attachment_file: # 检查路径字符串是否存在
+    # 这是 `requests` 库发送多个文件的标准方式。
+    # 我们构造一个元组列表 `(field_name, file_info_tuple)`。
+    # 重要的是，所有文件的 `field_name` 都是相同的 ("attachments")，
+    # 这样 FastAPI 才能将它们正确地解析为一个列表。
+    files_to_send = []
+    if attachment_files_list:
         try:
-            files["attachment"] = (os.path.basename(attachment_file), open(attachment_file, "rb"), 'application/octet-stream')
+            for file_path in attachment_files_list:
+                file_info = (
+                    'attachments', # 字段名
+                    (os.path.basename(file_path), open(file_path, "rb"), 'application/octet-stream')
+                )
+                files_to_send.append(file_info)
         except Exception as e:
-            return f"错误：无法打开附件文件 {attachment_file}。请检查文件是否存在或权限是否正确。详情: {e}"
+            return f"错误：无法打开附件文件。请检查文件是否存在或权限是否正确。详情: {e}"
     # ========================== END: BUG 修复 ============================
 
     url = ""
@@ -322,9 +331,10 @@ def send_or_schedule_email(
         except: pass
         return f"操作失败: {error_detail}"
     finally:
-        # 确保文件句柄被关闭
-        if files and "attachment" in files:
-            files["attachment"][1].close()
+        # 确保所有打开的文件句柄都被关闭
+        if files_to_send:
+            for _, file_tuple in files_to_send:
+                file_tuple[1].close()
 # ========================== END: 修改区域 (需求 ①) ============================
 
 
@@ -529,8 +539,61 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
             outputs=all_field_outputs
         )
 
-        gr.Markdown("### 4. 附加本地文件 (可选)")
-        attachment_component = gr.File(label="拖拽文件至此或点击上传", file_count="single", type="filepath")
+        gr.Markdown("### 4. 添加附件 (可选)")
+    
+        # 状态变量，用于在后台维护一个完整的、累加的文件路径列表
+        attachment_state = gr.State([])
+
+        with gr.Row():
+            # 用于显示当前已选择的所有附件
+            attachment_display = gr.Textbox(
+                label="已选择的附件列表", 
+                interactive=False, 
+                lines=4,
+                placeholder="这里将显示您所有已选择的文件..."
+            )
+        
+        with gr.Row():
+            # 允许用户选择多个文件的上传器
+            file_uploader = gr.File(
+                label="点击选择或拖拽文件到此处添加",
+                file_count="multiple",
+                type="filepath"
+            )
+            # 清空按钮
+            clear_attachments_btn = gr.Button("🗑️ 清空列表")
+
+        def update_attachment_list(current_list, new_files):
+            """
+            处理文件上传事件，将新文件添加到现有列表中。
+            """
+            if not new_files:
+                return current_list, "\n".join(current_list)
+            
+            # 合并新旧列表，并去重
+            updated_list = sorted(list(set(current_list + new_files)))
+            
+            # 更新状态变量和显示框
+            return updated_list, "\n".join(updated_list)
+
+        def clear_attachment_list():
+            """
+            清空附件列表。
+            """
+            return [], ""
+
+        # 事件绑定：当有新文件上传时，调用 update_attachment_list
+        file_uploader.upload(
+            fn=update_attachment_list,
+            inputs=[attachment_state, file_uploader],
+            outputs=[attachment_state, attachment_display]
+        )
+
+        # 事件绑定：点击清空按钮时，调用 clear_attachment_list
+        clear_attachments_btn.click(
+            fn=clear_attachment_list,
+            outputs=[attachment_state, attachment_display]
+        )
 
         gr.Markdown("### 5. 执行操作")
         
@@ -548,11 +611,11 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
         action_button.click(
             fn=send_or_schedule_email,
             # 【修改】在 inputs 列表中添加 attachment_component
-            inputs=[action_type, receiver_dropdown, template_dropdown, custom_subject_input, send_at_component, attachment_component] + all_field_inputs,
+            inputs=[action_type, receiver_dropdown, template_dropdown, custom_subject_input, send_at_component, attachment_state] + all_field_inputs,
             outputs=output_text
         )
         # 【修改】将 custom_subject_input 和 attachment_component 添加到返回值
-        return load_status, template_dropdown, custom_subject_input, attachment_component, action_button, all_field_outputs, toggle_template_fields
+        return load_status, template_dropdown, custom_subject_input, attachment_state, action_button, all_field_outputs, toggle_template_fields
 
     with gr.Tabs() as tabs:
         # --- Tab 1: 订阅管理 ---

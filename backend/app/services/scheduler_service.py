@@ -123,44 +123,55 @@ class SchedulerService:
     # 【修改点】原有的 _send_scheduled_emails 实例方法已被上面的顶级函数替代，故删除。
 
     @staticmethod
-    async def send_single_email_task(receiver_email: str, template_type: str, data: dict, custom_subject: str = None, temp_file_path: str = None):
+    # ========================== START: MODIFICATION (Multi-Attachment Support) ==========================
+    # DESIGNER'S NOTE:
+    # 修改了此任务函数的签名，将 `temp_file_path: str` 改为 `temp_file_paths: list`。
+    # 内部逻辑也相应地修改为遍历这个列表来处理和清理所有临时文件。
+    async def send_single_email_task(
+        receiver_email: str, 
+        template_type: str, 
+        data: dict, 
+        custom_subject: str = None, 
+        temp_file_paths: list = None
+    ):
+    # ========================== END: MODIFICATION (Multi-Attachment Support) ============================
         """
-        【异步改造 & 功能增强】这是一个静态方法，专门被 APScheduler 调用来执行一次性任务。
-        它不依赖 SchedulerService 实例的状态，因此可以被安全地序列化。
-        增加了 custom_subject 参数和对临时上传文件的处理能力。
+        【功能增强】这是一个静态方法，专门被 APScheduler 调用来执行一次性任务。
+        它现在能处理多个临时上传的附件。
         """
         try:
             print(f"执行一次性任务：向 {receiver_email} 发送 '{template_type}' 模板邮件。")
             template_func = getattr(template_manager, template_type, None)
             if template_func:
-                if asyncio.iscoroutinefunction(template_func):
-                    email_content = await template_func(data)
-                else:
-                    email_content = template_func(data)
-                
+                email_content = await template_func(data)
                 final_subject = custom_subject if custom_subject else email_content["subject"]
                 
-                # 将用户上传的临时文件路径（如果存在）与模板自身生成的附件路径合并
+                # 将模板自身生成的附件与用户上传的临时文件附件合并
                 final_attachments = email_content.get("attachments", [])
-                if temp_file_path and os.path.exists(temp_file_path):
-                    final_attachments.append(temp_file_path)
+                if temp_file_paths:
+                    for temp_path in temp_file_paths:
+                        if os.path.exists(temp_path):
+                            final_attachments.append(temp_path)
                 
                 await email_service.send_email(
                     receiver_email,
                     final_subject,
                     email_content["html"],
-                    final_attachments
+                    attachments=final_attachments,
+                    embedded_images=email_content.get("embedded_images", [])
                 )
             else:
                 print(f"错误：在执行一次性任务时，未找到模板 '{template_type}'。")
         finally:
-            # 关键：确保任务执行完毕后，删除临时上传的文件
-            if temp_file_path and os.path.exists(temp_file_path):
-                try:
-                    os.remove(temp_file_path)
-                    print(f"成功清理临时文件: {temp_file_path}")
-                except Exception as e:
-                    print(f"警告：清理临时文件 {temp_file_path} 失败: {e}")
+            # 关键：确保任务执行完毕后，删除所有临时上传的文件
+            if temp_file_paths:
+                for temp_path in temp_file_paths:
+                    if os.path.exists(temp_path):
+                        try:
+                            os.remove(temp_path)
+                            print(f"成功清理临时文件: {temp_path}")
+                        except Exception as e:
+                            print(f"警告：清理临时文件 {temp_path} 失败: {e}")
     # ========================== END: 修改区域 (需求 ①) ============================
     
     def add_cron_job(self, job_id: str, name: str, cron_string: str, args: list):

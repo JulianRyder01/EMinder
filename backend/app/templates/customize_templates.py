@@ -198,34 +198,32 @@ def get_local_file_report_template(data: dict) -> dict:
 # ===================================================================================
 script_runner_meta = {
     "display_name": "自动运行脚本并获取日志结果",
-    "description": "在后台非阻塞地运行指定命令，捕获其输出（日志），可选地总结日志并附加结果文件，最后将报告发送到邮箱。",
+    "description": "在后台运行命令，捕获其输出，并将脚本生成的所有指定文件作为附件发送。",
     "fields": [
         {
             "name": "script_command",
             "label": "脚本启动命令",
             "type": "textarea",
-            "default": "python -u /path/to/your/script.py --verbose"
+            "default": "python D:\\Desktop\\Develop\\Automatics\\GymGenAuto\\GymGenAuto.py"
         },
         {
             "name": "working_directory",
-            "label": "工作目录 (绝对路径, 或相对 backend 的路径)",
+            "label": "工作目录 (脚本执行的上下文目录)",
             "type": "text",
-            "default": "."
-        },
-        {
-            "name": "attach_file_path",
-            "label": "附加文件路径 (可选, 服务器路径)",
-            "type": "text",
-            "default": "/path/to/your/output.log"
+            "default": "D:\\Desktop\\Develop\\Automatics\\GymGenAuto"
         },
         # ========================== START: MODIFICATION (Requirement ①) ==========================
         # DESIGNER'S NOTE:
         # 新增一个字段，用于让用户指定任务完成后需要嵌入到邮件正文的图片路径。
         {
-            "name": "embed_image_path",
-            "label": "内嵌图片路径 (可选, 在邮件正文显示)",
-            "type": "text",
-            "default": "/path/to/your/result.png"
+            "name": "generated_attachment_paths",
+            "label": "脚本生成的附件路径 (每行一个)",
+            "type": "textarea",
+            "default": (
+                "D:\\Desktop\\Develop\\Automatics\\GymGenAuto\\generated_images\\output_1700.png\n"
+                "D:\\Desktop\\Develop\\Automatics\\GymGenAuto\\generated_images\\output_1830.png\n"
+                "D:\\Desktop\\Develop\\Automatics\\GymGenAuto\\generated_images\\output_2000.png"
+            )
         },
         # ========================== END: MODIFICATION (Requirement ①) ============================
         {
@@ -247,30 +245,19 @@ async def get_script_runner_template(data: dict) -> dict:
     work_dir = data.get('working_directory', '.').strip()
     attach_path = data.get('attach_file_path', '').strip()
     summary_prompt = data.get('log_summary_prompt', '').strip()
-    # ========================== START: MODIFICATION (Requirement ①) ==========================
-    embed_path = data.get('embed_image_path', '').strip()
-    # ========================== END: MODIFICATION (Requirement ①) ============================
+    # ========================== START: MODIFICATION (Unified Attachment System) ==========================
+    generated_paths_str = data.get('generated_attachment_paths', '').strip()
+    # ========================== END: MODIFICATION (Unified Attachment System) ============================
 
     if not command:
         return {
             "subject": "脚本执行失败：未提供命令",
-            "html": "<h4>配置错误</h4><p>您必须在'脚本启动命令'字段中提供一个有效的命令。</p>"
+            "html": "<h4>配置错误</h4><p>您必须在'脚本启动命令'字段中提供一个有效的命令。</p>",
+            "attachments": []
         }
     
-    # 获取 backend/ 目录的绝对路径，用于解析相对路径
-    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    
-    # ========================== START: 修改区域 (支持绝对路径) ==========================
-    # DESIGNER'S NOTE:
-    # 修正并增强了工作目录的解析逻辑，以完全支持您的需求。
-    # 1. 如果为 `working_directory` 提供了绝对路径，程序将直接使用它。
-    # 2. 如果提供了相对路径，程序将正确地将其解析为相对于 `backend` 目录的路径，这修复了先前实现中的一个错误。
-    abs_work_dir = work_dir if os.path.isabs(work_dir) else os.path.abspath(os.path.join(backend_dir, work_dir))
-    # ========================== END: 修改区域 (支持绝对路径) ============================
-
-    # --- 执行脚本 ---
-    # `script_runner_service.run_script` 是一个 async 函数，所以需要 await
-    exec_result = await script_runner_service.run_script(command, abs_work_dir)
+    # 脚本执行器现在内部处理绝对路径，这里无需转换
+    exec_result = await script_runner_service.run_script(command, work_dir)
 
     subject = f"脚本执行报告: {command.split()[0]} {'成功' if exec_result['success'] else '失败'}"
     
@@ -290,7 +277,7 @@ async def get_script_runner_template(data: dict) -> dict:
         <h4>执行详情 📊</h4>
         <ul>
             <li><strong>命令:</strong> <code>{command}</code></li>
-            <li><strong>工作目录:</strong> <code>{abs_work_dir}</code></li>
+            <li><strong>工作目录:</strong> <code>{os.path.abspath(work_dir)}</code></li>
             <li><strong>状态:</strong> <span style="color: {status_color}; font-weight: bold;">{status_text} (返回码: {exec_result.get('return_code')})</span></li>
             <li><strong>开始时间:</strong> {exec_result.get('start_time', 'N/A')}</li>
             <li><strong>结束时间:</strong> {exec_result.get('end_time', 'N/A')}</li>
@@ -329,44 +316,29 @@ async def get_script_runner_template(data: dict) -> dict:
     attachments_list = []
     # ========================== START: MODIFICATION (Requirements ①, ③) ==========================
     # DESIGNER'S NOTE:
-    # 遵循新的开发规范，分别处理附件和内嵌图片，并将它们放入不同的列表中返回。
-    embedded_images_list = []
+    # 核心逻辑变更：处理由脚本生成的所有附件。
+    # 我们不再区分图片或文件，所有路径都被统一处理并添加到 `attachments` 列表中。
+    # HTML 正文现在只显示一个确认列表，而不是尝试嵌入图片。
     
-    # 1. 处理传统文件附件
-    if attach_path:
-        # ========================== START: 修改区域 (支持绝对路径) ==========================
-        # DESIGNER'S NOTE:
-        # 附件路径的处理逻辑保持不变，但现在它基于一个已正确解析的 `abs_work_dir`。
-        # 它会优先识别绝对路径的附件，对于相对路径的附件，则会相对于脚本的（绝对）工作目录进行查找，
-        # 这是一个非常直观和符合预期的行为。
-        abs_attach_path = attach_path if os.path.isabs(attach_path) else os.path.join(abs_work_dir, attach_path)
-        # ========================== END: 修改区域 (支持绝对路径) ============================
+    script_generated_attachments = []
+    
+    if generated_paths_str:
+        paths = [p.strip() for p in generated_paths_str.split('\n') if p.strip()]
         
-        if os.path.exists(abs_attach_path) and os.path.isfile(abs_attach_path):
-            attachments_list.append(abs_attach_path)
-            html_parts.append(f"<h4>附加文件 📎</h4><p><i>✓ 已附加文件: {os.path.basename(attach_path)}</i></p>")
-        else:
-            html_parts.append(f"<h4>附加文件 📎</h4><p style='color: red;'><i>✗ 警告: 尝试附加的文件未找到: {abs_attach_path}</i></p>")
-
-    # 2. 处理邮件正文内嵌图片
-    if embed_path:
-        abs_embed_path = embed_path if os.path.isabs(embed_path) else os.path.join(abs_work_dir, embed_path)
-        if os.path.exists(abs_embed_path) and os.path.isfile(abs_embed_path):
-            image_cid = f'completion_image_{datetime.datetime.now().timestamp()}' # 使用时间戳确保CID唯一
-            embedded_images_list.append({
-                "path": abs_embed_path,
-                "cid": image_cid
-            })
-            html_parts.append(f"""
-                <h4>任务完成附图 🖼️</h4>
-                <p><i>✓ 已嵌入图片: {os.path.basename(embed_path)}</i></p>
-                <div style="text-align: center; padding: 10px; background-color: #f5f5f5; border-radius: 8px;">
-                    <img src="cid:{image_cid}" alt="任务完成图片" style="max-width: 100%; height: auto; border-radius: 4px;">
-                </div>
-            """)
-        else:
-            html_parts.append(f"<h4>任务完成附图 🖼️</h4><p style='color: red;'><i>✗ 警告: 尝试嵌入的图片未找到: {abs_embed_path}</i></p>")
-    # ========================== END: MODIFICATION (Requirements ①, ③) ============================
+        if paths:
+            attachment_html_list = "<ul>"
+            for path in paths:
+                # 注意：这里我们只检查路径是否为绝对路径，实际存在性由 email_service 在发送时最终确认。
+                # 这样即使脚本失败，我们仍然会尝试附加文件，这可能有助于调试。
+                if os.path.isabs(path):
+                    script_generated_attachments.append(path)
+                    attachment_html_list += f"<li>✓ {os.path.basename(path)}</li>"
+                else:
+                    attachment_html_list += f"<li style='color: red;'>✗ {os.path.basename(path)} (路径非绝对路径，已跳过)</li>"
+            attachment_html_list += "</ul>"
+            
+            html_parts.append(f"<h4>由脚本生成的附件 📎</h4>{attachment_html_list}")
+    # ========================== END: MODIFICATION (Unified Attachment System) ============================
 
     # --- 添加原始日志输出 ---
     if stdout_html:
@@ -378,8 +350,8 @@ async def get_script_runner_template(data: dict) -> dict:
     return {
         "subject": subject,
         "html": "".join(html_parts),
-        "attachments": attachments_list,
-        "embedded_images": embedded_images_list
+        # 关键：返回一个包含所有待附加文件路径的列表
+        "attachments": script_generated_attachments
     }
 # ===================================================================================
 # ========================== END: 修改区域 (需求 ①) ============================

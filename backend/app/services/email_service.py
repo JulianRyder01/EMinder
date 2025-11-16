@@ -1,6 +1,7 @@
 # backend/app/services/email_service.py (已修改)
 import aiosmtplib # 导入异步 SMTP 库
 import ssl
+import os
 import random
 import os # <-- 修改点：新增导入 os 模块
 from email.mime.text import MIMEText
@@ -29,12 +30,10 @@ class EmailService:
 
     # ========================== START: 修改区域 (需求 ①) ==========================
     # DESIGNER'S NOTE:
-    # 对 `send_email` 方法进行了彻底的重构和增强，以同时支持文件附件和正文内嵌图片。
-    # - 新增 `embedded_images` 参数，它是一个可选的字典列表，每个字典包含图片的路径和Content-ID (cid)。
-    # - 邮件结构从简单的 `MIMEMultipart` 升级为 `MIMEMultipart('related')`，这是支持HTML内嵌图片的标准做法。
-    #   如果同时存在附件，这个 'related' 部分会被包裹在一个 `MIMEMultipart('mixed')` 容器中。为了简化，我们直接
-    #   在一个 `MIMEMultipart` 对象中组合所有部分，这在现代邮件客户端中有很好的兼容性。
-    # - 增加了循环处理内嵌图片的逻辑，读取图片文件，创建 `MIMEImage` 对象，并添加 'Content-ID' 头。
+    # 这是对邮件发送逻辑的彻底重构，旨在解决图片无法内嵌的问题。
+    # - 邮件主体现在被构造成一个 MIMEMultipart('mixed') 容器，这是支持内容和附件混合的最佳实践。
+    # - HTML 内容和其内嵌图片被包裹在一个 MIMEMultipart('related') 子容器中。
+    # - 这种标准的嵌套结构能被绝大多数邮件客户端（包括QQ邮箱）正确识别。
     async def send_email(
         self, 
         receiver_email: str, 
@@ -59,16 +58,20 @@ class EmailService:
         sender_email = sender_account["email"]
         sender_password = sender_account["password"]
         
-        # 使用通用的 MIMEMultipart 来支持附件
-        message = MIMEMultipart()
+        # 步骤 1: 创建最外层的容器，使用 'mixed' 以支持附件
+        message = MIMEMultipart('mixed')
         message["Subject"] = subject
         message["From"] = f"EMinder <{sender_email}>"
         message["To"] = receiver_email
         
-        # 附加 HTML 邮件正文
-        message.attach(MIMEText(html_content, "html", "utf-8"))
+        # 步骤 2: 创建 'related' 容器，用于存放 HTML 和其内嵌的图片
+        msg_related = MIMEMultipart('related')
+        
+        # 将 HTML 内容附加到 'related' 容器中
+        msg_html = MIMEText(html_content, "html", "utf-8")
+        msg_related.attach(msg_html)
 
-        # 处理内嵌图片 (Embedded Images)
+        # 处理并附加所有内嵌图片到 'related' 容器中
         if embedded_images:
             for img_data in embedded_images:
                 img_path = img_data.get("path")
@@ -84,18 +87,30 @@ class EmailService:
                 try:
                     with open(img_path, 'rb') as fp:
                         img_part = MIMEImage(fp.read())
-                    # 添加 Content-ID，这是在 HTML 中通过 src="cid:..." 引用图片的关键
+                    
+                    # ========================== START: MODIFICATION (Fix Image Embedding) ==========================
+                    # DESIGNER'S NOTE: 这是解决图片显示问题的关键一步。
+                    # 我们为每个内嵌图片添加了两个至关重要的头信息：
+                    # 1. 'Content-ID': 用于在 HTML 的 <img> 标签中通过 "cid:" 引用。
+                    # 2. 'Content-Disposition': 'inline' 值明确告诉邮件客户端，这不是一个普通附件，
+                    #    而是应该直接在邮件正文中显示的内容。
                     img_part.add_header('Content-ID', f'<{img_cid}>')
-                    message.attach(img_part)
-                    print(f"成功嵌入图片: {img_path}")
+                    img_part.add_header('Content-Disposition', 'inline', filename=os.path.basename(img_path))
+                    # ========================== END: MODIFICATION (Fix Image Embedding) ============================
+                    
+                    msg_related.attach(img_part)
+                    print(f"成功将图片 {img_path} 关联到邮件正文。")
                 except Exception as e:
-                    print(f"错误: 嵌入图片 {img_path} 时失败: {e}")
+                    print(f"错误: 关联图片 {img_path} 时失败: {e}")
 
-        # 处理附件 (Attachments)
+        # 步骤 3: 将包含 HTML 和图片的 'related' 容器作为一个整体，附加到最外层的 'mixed' 容器中
+        message.attach(msg_related)
+        
+        # 步骤 4: 处理并附加所有传统文件附件到最外层的 'mixed' 容器中
         if attachments:
             for file_path in attachments:
                 if not os.path.exists(file_path) or not os.path.isfile(file_path):
-                    print(f"警告: 附件文件未找到或不是一个文件，已跳过: {file_path}")
+                    print(f"警告: 附件文件未找到，已跳过: {file_path}")
                     continue
                 
                 try:

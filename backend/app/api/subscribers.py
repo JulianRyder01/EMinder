@@ -1,6 +1,6 @@
 # backend/app/api/subscribers.py (已修改)
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException, Body, Form, File, UploadFile
-from typing import Dict, Optional
+from typing import Dict, Optional, List # <-- 新增导入 List
 from croniter import croniter
 import uuid
 import asyncio
@@ -112,11 +112,14 @@ async def send_email_now(
     template_type: str = Form(...),
     template_data_str: str = Form(...),
     custom_subject: Optional[str] = Form(None),
-    attachment: Optional[UploadFile] = File(None)
+    # ========================== START: MODIFICATION (Multi-Attachment Support) ==========================
+    # DESIGNER'S NOTE: 关键变更！
+    # 将原来的单个 `attachment` 参数改为 `attachments` 列表，以接收多个文件。
+    # `File(...)` 确保了即使没有文件上传，也会得到一个空列表，而不是 None。
+    attachments: List[UploadFile] = File(default=[])
+    # ========================== END: MODIFICATION (Multi-Attachment Support) ============================
 ):
-    """
-    立即发送一封指定的邮件，支持动态模板字段和可选的文件附件。
-    """
+    # ... (参数校验和 template_data 解析逻辑不变) ...
     if not receiver_email or not template_type:
         raise HTTPException(status_code=422, detail="请求体中缺少 'receiver_email' 或 'template_type'。")
 
@@ -125,13 +128,22 @@ async def send_email_now(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="无效的 template_data JSON 字符串。")
 
-    # 处理上传的附件
-    temp_file_path = save_temp_upload_file(attachment)
+    # ========================== START: MODIFICATION (Multi-Attachment Support) ==========================
+    # DESIGNER'S NOTE:
+    # 修改文件处理逻辑，以遍历附件列表并保存所有上传的文件。
+    temp_file_paths = []
+    if attachments:
+        for attachment in attachments:
+            temp_path = save_temp_upload_file(attachment)
+            if temp_path:
+                temp_file_paths.append(temp_path)
+    # ========================== END: MODIFICATION (Multi-Attachment Support) ============================
     
     template_func = getattr(template_manager, template_type, None)
     
     if not template_func:
-        if temp_file_path: os.remove(temp_file_path) # 清理
+        # 确保在出错时清理已上传的临时文件
+        for path in temp_file_paths: os.remove(path)
         raise HTTPException(status_code=404, detail=f"模板 '{template_type}' 未找到。")
     
     # 【异步修复】由于模板函数可能为异步（例如调用大模型），这里必须 await
@@ -140,22 +152,22 @@ async def send_email_now(
     
     final_subject = custom_subject if custom_subject else email_content["subject"]
     
-    # 将用户上传的临时文件路径（如果存在）与模板自身生成的附件路径合并
-    final_attachments = email_content.get("attachments", [])
-    if temp_file_path:
-        final_attachments.append(temp_file_path)
+    # 将模板自身生成的附件路径与用户上传的临时文件路径合并
+    final_attachments = email_content.get("attachments", []) + temp_file_paths
 
     background_tasks.add_task(
         email_service.send_email,
         receiver_email,
         final_subject,
         email_content["html"],
-        final_attachments # 传递合并后的附件列表
+        attachments=final_attachments, # 传递合并后的附件列表
+        embedded_images=email_content.get("embedded_images", [])
     )
     
-    # 如果有临时文件，添加一个清理任务。此任务会在 send_email 之后执行。
-    if temp_file_path:
-        background_tasks.add_task(os.remove, temp_file_path)
+    # 为所有临时文件添加清理任务
+    if temp_file_paths:
+        for path in temp_file_paths:
+            background_tasks.add_task(os.remove, path)
     
     return {"status": "success", "message": f"邮件正在发送至 {receiver_email}。"}
 
@@ -167,7 +179,9 @@ async def schedule_email_once(
     send_at_str: str = Form(...),
     template_data_str: str = Form(...),
     custom_subject: Optional[str] = Form(None),
-    attachment: Optional[UploadFile] = File(None)
+    # ========================== START: MODIFICATION (Multi-Attachment Support) ==========================
+    attachments: List[UploadFile] = File(default=[])
+    # ========================== END: MODIFICATION (Multi-Attachment Support) ============================
 ):
     """
     调度一个一次性的邮件发送任务，支持动态模板字段和可选的文件附件。
@@ -187,17 +201,21 @@ async def schedule_email_once(
     except ValueError:
         raise HTTPException(status_code=422, detail="时间格式错误，请使用 'YYYY-MM-DD HH:MM' 格式。")
 
-    # 处理上传的附件
-    temp_file_path = save_temp_upload_file(attachment)
-    
-    # DESIGNER'S NOTE:
-    # 将 `temp_file_path` 作为任务参数传递。
-    # `send_single_email_task` 函数将负责处理这个文件（附加和删除）。
+    # ========================== START: MODIFICATION (Multi-Attachment Support) ==========================
+    temp_file_paths = []
+    if attachments:
+        for attachment in attachments:
+            temp_path = save_temp_upload_file(attachment)
+            if temp_path:
+                temp_file_paths.append(temp_path)
+    # ========================== END: MODIFICATION (Multi-Attachment Support) ============================
+
     job = scheduler_service.scheduler.add_job(
         scheduler_service.send_single_email_task, # 这个任务函数已经是 async 的
         trigger='date',
         run_date=aware_dt,
-        args=[receiver_email, template_type, template_data, custom_subject],
+        # 传递文件路径列表，而不是单个路径
+        args=[receiver_email, template_type, template_data, custom_subject, temp_file_paths],
         id=f"once_{receiver_email}_{datetime.datetime.now().timestamp()}",
         name=f"One-time email to {receiver_email}"
     )
