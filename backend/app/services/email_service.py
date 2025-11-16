@@ -6,6 +6,11 @@ import os # <-- 修改点：新增导入 os 模块
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication # <-- 修改点：新增导入 MIMEApplication
+# ========================== START: MODIFICATION (Requirement ③) ==========================
+# DESIGNER'S NOTE:
+# 导入 MIMEImage 模块，这是处理邮件内嵌图片所必需的。
+from email.mime.image import MIMEImage
+# ========================== END: MODIFICATION (Requirement ③) ============================
 from ..core.config import settings
 
 class EmailService:
@@ -24,20 +29,31 @@ class EmailService:
 
     # ========================== START: 修改区域 (需求 ①) ==========================
     # DESIGNER'S NOTE:
-    # 对 `send_email` 方法进行了扩展，以支持文件附件功能。
-    # - 新增 `attachments` 参数，它是一个可选的文件路径列表。
-    # - 邮件结构从 `MIMEMultipart("alternative")` 更改为 `MIMEMultipart()`，这是支持混合内容（HTML + 附件）的标准做法。
-    # - 增加了循环处理附件的逻辑，将文件读取为二进制流，并使用 `MIMEApplication` 进行封装。
-    async def send_email(self, receiver_email: str, subject: str, html_content: str, attachments: list[str] = None) -> bool:
+    # 对 `send_email` 方法进行了彻底的重构和增强，以同时支持文件附件和正文内嵌图片。
+    # - 新增 `embedded_images` 参数，它是一个可选的字典列表，每个字典包含图片的路径和Content-ID (cid)。
+    # - 邮件结构从简单的 `MIMEMultipart` 升级为 `MIMEMultipart('related')`，这是支持HTML内嵌图片的标准做法。
+    #   如果同时存在附件，这个 'related' 部分会被包裹在一个 `MIMEMultipart('mixed')` 容器中。为了简化，我们直接
+    #   在一个 `MIMEMultipart` 对象中组合所有部分，这在现代邮件客户端中有很好的兼容性。
+    # - 增加了循环处理内嵌图片的逻辑，读取图片文件，创建 `MIMEImage` 对象，并添加 'Content-ID' 头。
+    async def send_email(
+        self, 
+        receiver_email: str, 
+        subject: str, 
+        html_content: str, 
+        attachments: list[str] = None, 
+        embedded_images: list[dict] = None
+    ) -> bool:
         """
         【异步改造 & 功能增强】发送邮件的核心方法。
         使用 aiosmtplib 实现非阻塞的邮件发送。
-        新增对文件附件的支持。
+        新增对文件附件和正文内嵌图片的支持。
 
         :param receiver_email: 收件人邮箱。
         :param subject: 邮件主题。
         :param html_content: 邮件的 HTML 内容。
-        :param attachments: 一个包含服务器上文件绝对路径的列表 (可选)。
+        :param attachments: 一个包含服务器上文件绝对路径的列表 (可选，作为附件)。
+        :param embedded_images: 一个包含图片信息的字典列表 (可选，用于在正文显示)。
+                                每个字典格式: {"path": "/path/to/img.jpg", "cid": "my_image_cid"}
         """
         sender_account = self._get_random_account()
         sender_email = sender_account["email"]
@@ -50,9 +66,32 @@ class EmailService:
         message["To"] = receiver_email
         
         # 附加 HTML 邮件正文
-        message.attach(MIMEText(html_content, "html"))
+        message.attach(MIMEText(html_content, "html", "utf-8"))
 
-        # 处理附件
+        # 处理内嵌图片 (Embedded Images)
+        if embedded_images:
+            for img_data in embedded_images:
+                img_path = img_data.get("path")
+                img_cid = img_data.get("cid")
+                if not all([img_path, img_cid]):
+                    print(f"警告: 无效的内嵌图片数据，已跳过: {img_data}")
+                    continue
+                
+                if not os.path.exists(img_path):
+                    print(f"警告: 内嵌图片文件未找到，已跳过: {img_path}")
+                    continue
+                    
+                try:
+                    with open(img_path, 'rb') as fp:
+                        img_part = MIMEImage(fp.read())
+                    # 添加 Content-ID，这是在 HTML 中通过 src="cid:..." 引用图片的关键
+                    img_part.add_header('Content-ID', f'<{img_cid}>')
+                    message.attach(img_part)
+                    print(f"成功嵌入图片: {img_path}")
+                except Exception as e:
+                    print(f"错误: 嵌入图片 {img_path} 时失败: {e}")
+
+        # 处理附件 (Attachments)
         if attachments:
             for file_path in attachments:
                 if not os.path.exists(file_path) or not os.path.isfile(file_path):

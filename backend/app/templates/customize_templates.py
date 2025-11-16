@@ -28,8 +28,9 @@
  2. 编写模板生成函数 (Template Function):
     - 每个模板都需要一个函数，用来接收用户在前端填写的数据，并生成最终的邮件 HTML 内容。
     - 函数必须接收一个名为 `data` 的字典作为参数。
-    - 函数必须返回一个字典，包含 `subject` (邮件主题) 和 `html` (邮件内容)。
-    - 【新功能】如果需要发送附件，函数可以额外返回一个 `attachments` 键，其值为一个文件路径列表，例如： `{"subject": "...", "html": "...", "attachments": ["/path/to/file1.log"]}`
+    - 【重要】函数必须返回一个符合开发规范的字典。详情请参阅 `CUSTOM_TEMPLATE_GUIDE.md`。
+      - 必须包含 `subject` (邮件主题) 和 `html` (邮件内容)。
+      - 可选包含 `attachments` (文件附件路径列表) 和 `embedded_images` (内嵌图片信息列表)。
     - 【异步注意】: 如果你的模板函数需要执行 I/O 操作 (如 API 请求、运行脚本)，请将其定义为 `async def`。
 
  3. 注册你的模板:
@@ -217,6 +218,16 @@ script_runner_meta = {
             "type": "text",
             "default": "/path/to/your/output.log"
         },
+        # ========================== START: MODIFICATION (Requirement ①) ==========================
+        # DESIGNER'S NOTE:
+        # 新增一个字段，用于让用户指定任务完成后需要嵌入到邮件正文的图片路径。
+        {
+            "name": "embed_image_path",
+            "label": "内嵌图片路径 (可选, 在邮件正文显示)",
+            "type": "text",
+            "default": "/path/to/your/result.png"
+        },
+        # ========================== END: MODIFICATION (Requirement ①) ============================
         {
             "name": "log_summary_prompt",
             "label": "日志总结提示词 (可选, 留空不总结)",
@@ -236,12 +247,14 @@ async def get_script_runner_template(data: dict) -> dict:
     work_dir = data.get('working_directory', '.').strip()
     attach_path = data.get('attach_file_path', '').strip()
     summary_prompt = data.get('log_summary_prompt', '').strip()
+    # ========================== START: MODIFICATION (Requirement ①) ==========================
+    embed_path = data.get('embed_image_path', '').strip()
+    # ========================== END: MODIFICATION (Requirement ①) ============================
 
     if not command:
         return {
             "subject": "脚本执行失败：未提供命令",
-            "html": "<h4>配置错误</h4><p>您必须在'脚本启动命令'字段中提供一个有效的命令。</p>",
-            "attachments": []
+            "html": "<h4>配置错误</h4><p>您必须在'脚本启动命令'字段中提供一个有效的命令。</p>"
         }
     
     # 获取 backend/ 目录的绝对路径，用于解析相对路径
@@ -312,8 +325,14 @@ async def get_script_runner_template(data: dict) -> dict:
         <pre style="white-space: pre-wrap; word-wrap: break-word; background-color: #fbe9e7; color: #b71c1c; padding: 15px; border-radius: 8px;">{stderr_html}</pre>
         """)
 
-    # --- 处理附件 ---
+    # --- 处理附件、图片 ---
     attachments_list = []
+    # ========================== START: MODIFICATION (Requirements ①, ③) ==========================
+    # DESIGNER'S NOTE:
+    # 遵循新的开发规范，分别处理附件和内嵌图片，并将它们放入不同的列表中返回。
+    embedded_images_list = []
+    
+    # 1. 处理传统文件附件
     if attach_path:
         # ========================== START: 修改区域 (支持绝对路径) ==========================
         # DESIGNER'S NOTE:
@@ -325,14 +344,42 @@ async def get_script_runner_template(data: dict) -> dict:
         
         if os.path.exists(abs_attach_path) and os.path.isfile(abs_attach_path):
             attachments_list.append(abs_attach_path)
-            html_parts.append(f"<p><i>✓ 已附加文件: {os.path.basename(attach_path)}</i></p>")
+            html_parts.append(f"<h4>附加文件 📎</h4><p><i>✓ 已附加文件: {os.path.basename(attach_path)}</i></p>")
         else:
-            html_parts.append(f"<p style='color: red;'><i>✗ 警告: 尝试附加的文件未找到: {abs_attach_path}</i></p>")
-            
+            html_parts.append(f"<h4>附加文件 📎</h4><p style='color: red;'><i>✗ 警告: 尝试附加的文件未找到: {abs_attach_path}</i></p>")
+
+    # 2. 处理邮件正文内嵌图片
+    if embed_path:
+        abs_embed_path = embed_path if os.path.isabs(embed_path) else os.path.join(abs_work_dir, embed_path)
+        if os.path.exists(abs_embed_path) and os.path.isfile(abs_embed_path):
+            image_cid = f'completion_image_{datetime.datetime.now().timestamp()}' # 使用时间戳确保CID唯一
+            embedded_images_list.append({
+                "path": abs_embed_path,
+                "cid": image_cid
+            })
+            html_parts.append(f"""
+                <h4>任务完成附图 🖼️</h4>
+                <p><i>✓ 已嵌入图片: {os.path.basename(embed_path)}</i></p>
+                <div style="text-align: center; padding: 10px; background-color: #f5f5f5; border-radius: 8px;">
+                    <img src="cid:{image_cid}" alt="任务完成图片" style="max-width: 100%; height: auto; border-radius: 4px;">
+                </div>
+            """)
+        else:
+            html_parts.append(f"<h4>任务完成附图 🖼️</h4><p style='color: red;'><i>✗ 警告: 尝试嵌入的图片未找到: {abs_embed_path}</i></p>")
+    # ========================== END: MODIFICATION (Requirements ①, ③) ============================
+
+    # --- 添加原始日志输出 ---
+    if stdout_html:
+        html_parts.append(f'<h4>标准输出 (stdout) 📋</h4><pre style="white-space: pre-wrap; word-wrap: break-word; background-color: #f5f5f5; padding: 15px; border-radius: 8px;">{stdout_html}</pre>')
+    if stderr_html:
+        html_parts.append(f'<h4>标准错误 (stderr) ❗</h4><pre style="white-space: pre-wrap; word-wrap: break-word; background-color: #fbe9e7; color: #b71c1c; padding: 15px; border-radius: 8px;">{stderr_html}</pre>')
+        
+    # --- 返回符合新规范的完整字典 ---
     return {
         "subject": subject,
         "html": "".join(html_parts),
-        "attachments": attachments_list # <-- 新增：返回附件路径列表
+        "attachments": attachments_list,
+        "embedded_images": embedded_images_list
     }
 # ===================================================================================
 # ========================== END: 修改区域 (需求 ①) ============================
@@ -571,15 +618,13 @@ def get_monthly_learning_report_template(data: dict) -> dict:
 # 字典的 `value` 是一个包含元数据和生成函数的字典。
 
 custom_templates = {
-    # ========================== START: 修改区域 (需求 ①) ==========================
-    "local_file_report": { # 注册新的本地文件上传模板
-        "meta": local_file_report_meta,
-        "func": get_local_file_report_template
-    },
-    # ========================== END: 修改区域 (需求 ①) ============================
     "script_runner": {
         "meta": script_runner_meta,
         "func": get_script_runner_template
+    },
+    "local_file_report": {
+        "meta": local_file_report_meta,
+        "func": get_local_file_report_template
     },
     "deepseek_workflow": {
         "meta": deepseek_workflow_meta,

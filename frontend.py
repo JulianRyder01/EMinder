@@ -7,25 +7,36 @@ import pandas as pd
 import re
 import json # <-- 新增导入
 from urllib.parse import quote
+import argparse
 
-os.environ["GRADIO_ANALYTICS_ENABLED"] = "false"
+run_port = 10101
+if __name__ == "__main__":
+    # --- 后端 API 地址 ---
+    parser = argparse.ArgumentParser(description="EMinder Frontend Launcher")
+    parser.add_argument("--port",type=int,default=10101,help="Port to run the frontend server on (default: 10101)")
+    parser.add_argument("--bnport",type=int,default=8421,help="Port to run the backend server on (default: 8421)")
+    parser.add_argument("--bnserver",type=str,default="http://127.0.0.1",help="Backend server address (default: http://127.0.0.1)")
+    arg = parser.parse_args()
 
-# --- 后端 API 地址 ---
-API_BASE_URL = "http://127.0.0.1:8000/api"
-TEMPLATES_INFO_URL = f"{API_BASE_URL}/templates/info"
-# 【修改点】API URL 更新
-SUBSCRIBERS_URL = f"{API_BASE_URL}/subscribers"
-SEND_NOW_URL = f"{API_BASE_URL}/send-now"
-SCHEDULE_ONCE_URL = f"{API_BASE_URL}/schedule-once"
-SCHEDULE_CRON_URL = f"{API_BASE_URL}/schedule-cron"
-JOBS_URL = f"{API_BASE_URL}/jobs"
+    run_port = getattr(arg, "port")
+    backend = getattr(arg, "bnserver")
+    backend_port = getattr(arg, "bnport")
 
-# --- 全局状态 ---
-# 用于存储从后端获取的模板信息
-TEMPLATES_METADATA = {}
-# 用于在下拉列表中存储 email -> remark_name 的映射
-SUBSCRIBER_CHOICES = []
+    API_BASE_URL = f"{backend}:{backend_port}/api"
+    os.environ["GRADIO_ANALYTICS_ENABLED"] = "false"
+    TEMPLATES_INFO_URL = f"{API_BASE_URL}/templates/info"
+    # 【修改点】API URL 更新
+    SUBSCRIBERS_URL = f"{API_BASE_URL}/subscribers"
+    SEND_NOW_URL = f"{API_BASE_URL}/send-now"
+    SCHEDULE_ONCE_URL = f"{API_BASE_URL}/schedule-once"
+    SCHEDULE_CRON_URL = f"{API_BASE_URL}/schedule-cron"
+    JOBS_URL = f"{API_BASE_URL}/jobs"
 
+    # --- 全局状态 ---
+    # 用于存储从后端获取的模板信息
+    TEMPLATES_METADATA = {}
+    # 用于在下拉列表中存储 email -> remark_name 的映射
+    SUBSCRIBER_CHOICES = []
 # --- API 调用函数 ---
 
 def refresh_subscribers_list():
@@ -947,5 +958,4 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
 
 if __name__ == "__main__":
     print("EMinder 前端控制中心即将启动...")
-    print("请在浏览器中打开 http://127.0.0.1:7860")
-    demo.launch(server_name="0.0.0.0", server_port=7860, inbrowser=True)
+    demo.launch(server_name="0.0.0.0", server_port=run_port, inbrowser=True)
