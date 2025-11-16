@@ -1,10 +1,12 @@
 # backend/app/api/subscribers.py (已修改)
-from fastapi import APIRouter, Request, BackgroundTasks, HTTPException, Body
-from typing import Dict
-from croniter import croniter  # 新增导入
-import uuid  # 新增导入
-import asyncio # 新增导入
-# 【修改点】导入重命名后的 sqlite_store
+from fastapi import APIRouter, Request, BackgroundTasks, HTTPException, Body, Form, File, UploadFile
+from typing import Dict, Optional
+from croniter import croniter
+import uuid
+import asyncio
+import json # <-- 新增导入
+import os   # <-- 新增导入
+import shutil # <-- 新增导入
 from ..storage.sqlite_store import store
 from ..services.scheduler_service import scheduler_service
 from ..services.email_service import email_service
@@ -15,6 +17,28 @@ from urllib.parse import unquote
 
 router = APIRouter()
 
+# --- 辅助函数：处理临时文件 ---
+def save_temp_upload_file(upload_file: UploadFile) -> Optional[str]:
+    """将上传的文件保存到临时目录，并返回其绝对路径。"""
+    if not upload_file:
+        return None
+    try:
+        # 创建一个唯一的文件名以避免冲突
+        temp_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'temp_uploads')
+        unique_filename = f"{uuid.uuid4().hex}_{upload_file.filename}"
+        file_path = os.path.join(temp_dir, unique_filename)
+        
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(upload_file.file, buffer)
+            
+        return file_path
+    except Exception as e:
+        print(f"错误：保存临时上传文件失败: {e}")
+        return None
+    finally:
+        upload_file.file.close()
+
+# ... (get_all_subscribers, add_subscriber, update_subscriber, delete_subscriber 方法保持不变) ...
 @router.get("/subscribers")
 def get_all_subscribers():
     """
@@ -73,75 +97,89 @@ async def delete_subscriber(email: str):
     else:
         raise HTTPException(status_code=404, detail=f"未找到邮箱为 {email} 的订阅者。")
 
-# 【修改点】原有的 /subscribe 和 /confirm 端点已废弃，被新的 /subscribers 增删改查 API 替代
-# 保留邮件发送相关的 API
 
+# ========================== START: 修改区域 (需求 ①) ==========================
+# DESIGNER'S NOTE:
+# 对 /send-now 端点进行了彻底重构，以支持文件上传。
+# - 不再接收 JSON body，而是使用 Form(...) 和 File(...) 来处理 multipart/form-data 请求。
+# - `template_data` 现在作为一个 JSON 字符串 (`template_data_str`) 传递，需要在后端解析。
+# - 如果有附件上传，会将其保存为临时文件，并将路径传递给邮件服务。
+# - 使用 BackgroundTasks 确保在邮件发送后，临时文件被可靠地删除。
 @router.post("/send-now")
-async def send_email_now(request: Request, background_tasks: BackgroundTasks):
+async def send_email_now(
+    background_tasks: BackgroundTasks,
+    receiver_email: str = Form(...),
+    template_type: str = Form(...),
+    template_data_str: str = Form(...),
+    custom_subject: Optional[str] = Form(None),
+    attachment: Optional[UploadFile] = File(None)
+):
     """
-    立即发送一封指定的邮件。
-    现在接收 JSON body，以支持动态模板字段。
-    【新增】支持 custom_subject 字段。
+    立即发送一封指定的邮件，支持动态模板字段和可选的文件附件。
     """
-    try:
-        payload = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="无效的 JSON 请求体。")
-
-    receiver_email = payload.get("receiver_email")
-    template_type = payload.get("template_type")
-    template_data = payload.get("template_data", {})
-    custom_subject = payload.get("custom_subject") # 新增
-
     if not receiver_email or not template_type:
         raise HTTPException(status_code=422, detail="请求体中缺少 'receiver_email' 或 'template_type'。")
 
-    template_func_name = f"get_{template_type}_template"
+    try:
+        template_data = json.loads(template_data_str)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="无效的 template_data JSON 字符串。")
+
+    # 处理上传的附件
+    temp_file_path = save_temp_upload_file(attachment)
+    
     template_func = getattr(template_manager, template_type, None)
     
     if not template_func:
+        if temp_file_path: os.remove(temp_file_path) # 清理
         raise HTTPException(status_code=404, detail=f"模板 '{template_type}' 未找到。")
     
     # 【异步修复】由于模板函数可能为异步（例如调用大模型），这里必须 await
     # TemplateManager 的包装器确保了所有模板都可以被 await
     email_content = await template_func(template_data)
     
-    # 【修改】决定最终使用的标题
     final_subject = custom_subject if custom_subject else email_content["subject"]
     
-    # 注意：虽然 send_email 是异步的，但 BackgroundTasks 会在后台处理它，
-    # 这里的 add_task 调用本身是同步的，所以不需要 await。
+    # 将用户上传的临时文件路径（如果存在）与模板自身生成的附件路径合并
+    final_attachments = email_content.get("attachments", [])
+    if temp_file_path:
+        final_attachments.append(temp_file_path)
+
     background_tasks.add_task(
         email_service.send_email,
         receiver_email,
         final_subject,
-        email_content["html"]
+        email_content["html"],
+        final_attachments # 传递合并后的附件列表
     )
+    
+    # 如果有临时文件，添加一个清理任务。此任务会在 send_email 之后执行。
+    if temp_file_path:
+        background_tasks.add_task(os.remove, temp_file_path)
     
     return {"status": "success", "message": f"邮件正在发送至 {receiver_email}。"}
 
 
 @router.post("/schedule-once")
-async def schedule_email_once(request: Request):
+async def schedule_email_once(
+    receiver_email: str = Form(...),
+    template_type: str = Form(...),
+    send_at_str: str = Form(...),
+    template_data_str: str = Form(...),
+    custom_subject: Optional[str] = Form(None),
+    attachment: Optional[UploadFile] = File(None)
+):
     """
-    调度一个一次性的邮件发送任务。
-    现在接收 JSON body。
-    【新增】支持 custom_subject 字段。
+    调度一个一次性的邮件发送任务，支持动态模板字段和可选的文件附件。
     """
-    try:
-        payload = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="无效的 JSON 请求体。")
-        
-    receiver_email = payload.get("receiver_email")
-    template_type = payload.get("template_type")
-    send_at_str = payload.get("send_at") # 格式: "YYYY-MM-DD HH:MM"
-    template_data = payload.get("template_data", {})
-    custom_subject = payload.get("custom_subject") # 新增
-
     if not all([receiver_email, template_type, send_at_str]):
         raise HTTPException(status_code=422, detail="请求体中缺少 'receiver_email', 'template_type' 或 'send_at'。")
 
+    try:
+        template_data = json.loads(template_data_str)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="无效的 template_data JSON 字符串。")
+        
     try:
         naive_dt = datetime.datetime.strptime(send_at_str, "%Y-%m-%d %H:%M")
         tz = pytz.timezone(str(scheduler_service.scheduler.timezone))
@@ -149,7 +187,12 @@ async def schedule_email_once(request: Request):
     except ValueError:
         raise HTTPException(status_code=422, detail="时间格式错误，请使用 'YYYY-MM-DD HH:MM' 格式。")
 
-    # 【修改】将 custom_subject 添加到传递给任务的参数列表中
+    # 处理上传的附件
+    temp_file_path = save_temp_upload_file(attachment)
+    
+    # DESIGNER'S NOTE:
+    # 将 `temp_file_path` 作为任务参数传递。
+    # `send_single_email_task` 函数将负责处理这个文件（附加和删除）。
     job = scheduler_service.scheduler.add_job(
         scheduler_service.send_single_email_task, # 这个任务函数已经是 async 的
         trigger='date',
@@ -170,6 +213,7 @@ async def schedule_email_cron(request: Request):
     """
     【新增】通过 Cron 表达式调度一个周期性的邮件发送任务。
     【新增】支持 custom_subject 字段。
+    【注意】周期性任务不支持即时文件上传，文件来源需由模板自身逻辑定义（例如从固定服务器路径读取）。
     """
     try:
         payload = await request.json()

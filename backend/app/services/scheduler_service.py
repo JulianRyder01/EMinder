@@ -1,9 +1,10 @@
 # backend/app/services/scheduler_service.py (已修正序列化错误)
 import datetime
 import asyncio
+import os # <-- 新增导入
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-from croniter import croniter  # 需要安装: pip install croniter
+from croniter import croniter
 from ..core.config import settings
 from .email_service import email_service
 from ..templates.email_templates import template_manager
@@ -62,14 +63,11 @@ async def _send_recurring_emails_task():
     
     print("--- 定时邮件发送任务执行完毕 ---\n")
 
-
-# --- 【新增】用于执行自定义周期性任务的顶级函数 ---
-# 同样是为了解决 APScheduler 的序列化问题
 async def _send_custom_cron_email_task(receiver_emails: list[str], template_type: str, data: dict, custom_subject: str = None):
     """
-    【异步改造】根据指定的参数，向一个邮件列表发送模板邮件。
+    【异步改造 & 功能增强】根据指定的参数，向一个邮件列表发送模板邮件。
     这是一个独立的函数，用于用户自定义的周期性任务。
-    【新增】增加了 custom_subject 参数。
+    增加了 custom_subject 参数和附件处理能力。
     """
     print(f"\n[{datetime.datetime.now()}] --- 开始执行自定义周期任务: 发送 '{template_type}' ---")
     
@@ -91,6 +89,9 @@ async def _send_custom_cron_email_task(receiver_emails: list[str], template_type
     # 【修改】如果提供了自定义标题，则使用它；否则，使用模板的默认标题。
     final_subject = custom_subject if custom_subject else email_content["subject"]
     
+    # 从模板函数的返回结果中提取附件路径列表 (新)
+    attachments_to_send = email_content.get("attachments", [])
+    
     print(f"准备向 {len(receiver_emails)} 位接收者发送邮件 (标题: '{final_subject}'): {', '.join(receiver_emails)}")
     
     tasks = []
@@ -98,7 +99,8 @@ async def _send_custom_cron_email_task(receiver_emails: list[str], template_type
         task = email_service.send_email(
             receiver_email=email,
             subject=final_subject,
-            html_content=email_content["html"]
+            html_content=email_content["html"],
+            attachments=attachments_to_send
         )
         tasks.append(task)
         
@@ -121,32 +123,45 @@ class SchedulerService:
     # 【修改点】原有的 _send_scheduled_emails 实例方法已被上面的顶级函数替代，故删除。
 
     @staticmethod
-    async def send_single_email_task(receiver_email: str, template_type: str, data: dict, custom_subject: str = None):
+    async def send_single_email_task(receiver_email: str, template_type: str, data: dict, custom_subject: str = None, temp_file_path: str = None):
         """
-        【异步改造】这是一个静态方法，专门被 APScheduler 调用来执行一次性任务。
+        【异步改造 & 功能增强】这是一个静态方法，专门被 APScheduler 调用来执行一次性任务。
         它不依赖 SchedulerService 实例的状态，因此可以被安全地序列化。
-        【新增】增加了 custom_subject 参数。
+        增加了 custom_subject 参数和对临时上传文件的处理能力。
         """
-        print(f"执行一次性任务：向 {receiver_email} 发送 '{template_type}' 模板邮件。")
-        template_func = getattr(template_manager, template_type, None)
-        if template_func:
-            # 检查模板函数是否为异步
-            if asyncio.iscoroutinefunction(template_func):
-                email_content = await template_func(data)
+        try:
+            print(f"执行一次性任务：向 {receiver_email} 发送 '{template_type}' 模板邮件。")
+            template_func = getattr(template_manager, template_type, None)
+            if template_func:
+                if asyncio.iscoroutinefunction(template_func):
+                    email_content = await template_func(data)
+                else:
+                    email_content = template_func(data)
+                
+                final_subject = custom_subject if custom_subject else email_content["subject"]
+                
+                # 将用户上传的临时文件路径（如果存在）与模板自身生成的附件路径合并
+                final_attachments = email_content.get("attachments", [])
+                if temp_file_path and os.path.exists(temp_file_path):
+                    final_attachments.append(temp_file_path)
+                
+                await email_service.send_email(
+                    receiver_email,
+                    final_subject,
+                    email_content["html"],
+                    final_attachments
+                )
             else:
-                email_content = template_func(data)
-            
-            # 【修改】如果提供了自定义标题，则使用它；否则，使用模板的默认标题。
-            final_subject = custom_subject if custom_subject else email_content["subject"]
-            
-            # 直接 await 异步发送邮件
-            await email_service.send_email(
-                receiver_email,
-                final_subject,
-                email_content["html"]
-            )
-        else:
-            print(f"错误：在执行一次性任务时，未找到模板 '{template_type}'。")
+                print(f"错误：在执行一次性任务时，未找到模板 '{template_type}'。")
+        finally:
+            # 关键：确保任务执行完毕后，删除临时上传的文件
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.remove(temp_file_path)
+                    print(f"成功清理临时文件: {temp_file_path}")
+                except Exception as e:
+                    print(f"警告：清理临时文件 {temp_file_path} 失败: {e}")
+    # ========================== END: 修改区域 (需求 ①) ============================
     
     def add_cron_job(self, job_id: str, name: str, cron_string: str, args: list):
         """
@@ -182,23 +197,31 @@ class SchedulerService:
             
     def start(self):
         """添加任务并启动调度器"""
-        # add_job 会自动检测到 _send_recurring_emails_task 是协程并正确地执行它
-        self.scheduler.add_job(
-            # 【核心修正点】这里调用的目标是上面定义的顶级函数，而不是 self._send_scheduled_emails
-            _send_recurring_emails_task,
-            'cron',
-            id="recurring_daily_summary",
-            name="每日总结 (周期性)",
-            year=settings.DAILY_SUMMARY_CRON.split(' ')[4],
-            month=settings.DAILY_SUMMARY_CRON.split(' ')[3],
-            day=settings.DAILY_SUMMARY_CRON.split(' ')[2],
-            hour=settings.DAILY_SUMMARY_CRON.split(' ')[1],
-            minute=settings.DAILY_SUMMARY_CRON.split(' ')[0],
-            replace_existing=True
-        )
+        # ========================== START: 修改区域 (需求 ②) ==========================
+        # DESIGNER'S NOTE:
+        # 根据用户需求，注释掉在后端启动时自动添加的“每日总结”周期性任务。
+        # 用户现在可以通过前端UI来添加所有周期性任务，这样更加灵活。
+        # 如果未来需要恢复此功能，只需取消下面的注释即可。
+        
+        # self.scheduler.add_job(
+        #     _send_recurring_emails_task,
+        #     'cron',
+        #     id="recurring_daily_summary",
+        #     name="每日总结 (周期性)",
+        #     year=settings.DAILY_SUMMARY_CRON.split(' ')[4],
+        #     month=settings.DAILY_SUMMARY_CRON.split(' ')[3],
+        #     day=settings.DAILY_SUMMARY_CRON.split(' ')[2],
+        #     hour=settings.DAILY_SUMMARY_CRON.split(' ')[1],
+        #     minute=settings.DAILY_SUMMARY_CRON.split(' ')[0],
+        #     replace_existing=True
+        # )
+        # ========================== END: 修改区域 (需求 ②) ============================
+        
         self.scheduler.start()
         print(f"后台调度器已启动。所有任务将持久化到数据库: {settings.DATABASE_URL}")
-        print(f"每日邮件任务将按 CRON 表达式 '{settings.DAILY_SUMMARY_CRON}' 执行。")
+        
+        # 由于默认任务已移除，此打印信息也不再需要
+        # print(f"每日邮件任务将按 CRON 表达式 '{settings.DAILY_SUMMARY_CRON}' 执行。")
 
     def shutdown(self):
         """安全关闭调度器"""

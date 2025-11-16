@@ -2,8 +2,10 @@
 import aiosmtplib # 导入异步 SMTP 库
 import ssl
 import random
+import os # <-- 修改点：新增导入 os 模块
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication # <-- 修改点：新增导入 MIMEApplication
 from ..core.config import settings
 
 class EmailService:
@@ -20,20 +22,53 @@ class EmailService:
         """从账户池中随机选择一个账户用于发送，实现发信源轮换"""
         return random.choice(self.accounts)
 
-    async def send_email(self, receiver_email: str, subject: str, html_content: str) -> bool:
+    # ========================== START: 修改区域 (需求 ①) ==========================
+    # DESIGNER'S NOTE:
+    # 对 `send_email` 方法进行了扩展，以支持文件附件功能。
+    # - 新增 `attachments` 参数，它是一个可选的文件路径列表。
+    # - 邮件结构从 `MIMEMultipart("alternative")` 更改为 `MIMEMultipart()`，这是支持混合内容（HTML + 附件）的标准做法。
+    # - 增加了循环处理附件的逻辑，将文件读取为二进制流，并使用 `MIMEApplication` 进行封装。
+    async def send_email(self, receiver_email: str, subject: str, html_content: str, attachments: list[str] = None) -> bool:
         """
-        【异步改造】发送邮件的核心方法。
+        【异步改造 & 功能增强】发送邮件的核心方法。
         使用 aiosmtplib 实现非阻塞的邮件发送。
+        新增对文件附件的支持。
+
+        :param receiver_email: 收件人邮箱。
+        :param subject: 邮件主题。
+        :param html_content: 邮件的 HTML 内容。
+        :param attachments: 一个包含服务器上文件绝对路径的列表 (可选)。
         """
         sender_account = self._get_random_account()
         sender_email = sender_account["email"]
         sender_password = sender_account["password"]
         
-        message = MIMEMultipart("alternative")
+        # 使用通用的 MIMEMultipart 来支持附件
+        message = MIMEMultipart()
         message["Subject"] = subject
         message["From"] = f"EMinder <{sender_email}>"
         message["To"] = receiver_email
+        
+        # 附加 HTML 邮件正文
         message.attach(MIMEText(html_content, "html"))
+
+        # 处理附件
+        if attachments:
+            for file_path in attachments:
+                if not os.path.exists(file_path) or not os.path.isfile(file_path):
+                    print(f"警告: 附件文件未找到或不是一个文件，已跳过: {file_path}")
+                    continue
+                
+                try:
+                    with open(file_path, "rb") as f:
+                        part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
+                    
+                    # 添加必要的头信息
+                    part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
+                    message.attach(part)
+                    print(f"成功附加文件: {file_path}")
+                except Exception as e:
+                    print(f"错误: 附加文件 {file_path} 时失败: {e}")
 
         try:
             # aiosmtplib 使用与 smtplib 类似的参数，use_tls=True 对应 SMTP_SSL
@@ -60,18 +95,10 @@ class EmailService:
             print(f"邮件已通过 [{sender_email}] 成功发送至 [{receiver_email}]。(服务器提前关闭连接，可安全忽略)")
             return True
         except Exception as e:
-            # 【修改点】核心修复逻辑：专门处理邮件已发送但连接关闭时产生的特定错误
-            # 这个错误是 smtplib 在某些 SMTP 服务器（如QQ）上可能遇到的非标准行为
-            # 它的特征是一个元组 (-1, b'\x00\x00\x00')
-            if isinstance(e, tuple) and e == (-1, b'\x00\x00\x00'):
-                # 因为邮件实际上已经发送成功，我们在这里将状态报告为成功
-                # 并打印一条警告信息，而不是错误信息
-                print(f"邮件已通过 [{sender_email}] 成功发送至 [{receiver_email}]。(连接关闭时出现非致命错误，可安全忽略)")
-                return True  # 返回 True，修正状态显示问题
-            else:
-                # 对于所有其他未知的、真正的错误，仍然报告失败
-                print(f"邮件发送失败，发信源 [{sender_email}] -> [{receiver_email}]。错误: {e}")
-                return False
+            # 对于所有其他未知的、真正的错误，仍然报告失败
+            print(f"邮件发送失败，发信源 [{sender_email}] -> [{receiver_email}]。错误: {e}")
+            return False
+    # ========================== END: 修改区域 (需求 ①) ============================
 
 # 创建一个全局邮件服务实例
 email_service = EmailService()

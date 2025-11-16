@@ -95,11 +95,16 @@ class TemplateManager:
         """返回所有模板的元数据"""
         return self._templates_metadata
 
-    # 【异步修复】统一的模板包装辅助方法 
+    # ========================== START: 修改区域 (需求 ①) ==========================
+    # DESIGNER'S NOTE:
+    # 对 `_apply_base_template` 包装器进行了关键修改，使其能够识别并传递附件信息。
+    # - 原始模板函数现在可以返回一个包含 `subject`, `html`, 和可选 `attachments` 键的字典。
+    # - 这个包装器会将 `attachments` 键原样传递到最终的返回结果中，
+    #   这样调度器服务 (`scheduler_service`) 就能获取到附件列表并将其传递给邮件服务 (`email_service`)。
     async def _apply_base_template(self, original_function, data: dict) -> dict:
         """
-        【异步改造】执行一个原始模板函数，并将其输出用基础HTML样式进行包装。
-        此函数现在是异步的，可以处理同步和异步的原始模板函数。
+        【异步改造 & 功能增强】执行一个原始模板函数，并将其输出用基础HTML样式进行包装。
+        此函数现在是异步的，可以处理同步和异步的原始模板函数，并能传递附件信息。
         """
         # 1. 检查原始函数是否为协程函数，并相应地调用它
         if asyncio.iscoroutinefunction(original_function):
@@ -111,12 +116,16 @@ class TemplateManager:
         
         subject = email_parts.get("subject", "无主题")
         raw_html = email_parts.get("html", "")
+        # 新增：获取附件列表，如果不存在则默认为空列表
+        attachments = email_parts.get("attachments", [])
         
         # 2. 使用 get_base_html 进行包装，主题将作为邮件内容的标题
         final_html = self.get_base_html(raw_html, subject)
         
-        # 3. 返回与内置模板完全一致的最终结果
-        return {"subject": subject, "html": final_html}
+        # 3. 返回包含主题、HTML 和附件的最终结果
+        return {"subject": subject, "html": final_html, "attachments": attachments}
+    # ========================== END: 修改区域 (需求 ①) ============================
+    
     @staticmethod
     def get_base_html(content: str, title: str) -> str:
         """提供一个更美观、响应式的邮件样式容器"""

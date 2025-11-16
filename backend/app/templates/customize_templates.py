@@ -29,7 +29,8 @@
     - 每个模板都需要一个函数，用来接收用户在前端填写的数据，并生成最终的邮件 HTML 内容。
     - 函数必须接收一个名为 `data` 的字典作为参数。
     - 函数必须返回一个字典，包含 `subject` (邮件主题) 和 `html` (邮件内容)。
-    - 【异步注意】: 如果你的模板函数需要执行 I/O 操作 (如 API 请求)，请将其定义为 `async def`。
+    - 【新功能】如果需要发送附件，函数可以额外返回一个 `attachments` 键，其值为一个文件路径列表，例如： `{"subject": "...", "html": "...", "attachments": ["/path/to/file1.log"]}`
+    - 【异步注意】: 如果你的模板函数需要执行 I/O 操作 (如 API 请求、运行脚本)，请将其定义为 `async def`。
 
  3. 注册你的模板:
     - 将你创建的元数据字典和模板生成函数组合在一起，形成一个完整的模板信息。
@@ -70,6 +71,14 @@ except ImportError:
 # 【新增】导入大模型服务
 # ===================================================================================
 from ..services.llm_service import llm_service
+
+
+# ========================== START: 修改区域 (需求 ①) ==========================
+# DESIGNER'S NOTE:
+# 导入新创建的 ScriptRunnerService，用于执行后台脚本。
+# 这是实现“自动运行脚本并获取日志结果”模板的核心依赖。
+from ..services.script_runner_service import script_runner_service
+# ========================== END: 修改区域 (需求 ①) ============================
 
 
 # ===================================================================================
@@ -126,6 +135,185 @@ def _read_and_process_report_file(report_folder: str, report_filename: str) -> d
             <pre>{str(e)}</pre>
         """
         return {"error": True, "subject": f"错误：处理报告 {report_filename} 失败", "html": error_message}
+
+# ========================== START: 修改区域 (需求 ①) ==========================
+# ===================================================================================
+# 【新增模板】: 发送本地文件报告
+# DESIGNER'S NOTE:
+# 这个模板是专门为响应用户上传文件的需求而创建的。
+# 它非常简单，UI上几乎没有字段，核心功能就是让用户上传文件。
+# 它的模板函数 `get_local_file_report_template` 几乎是空的，
+# 因为实际的文件处理（保存和附加）是在API层完成的。
+# 这使得用户体验非常直接：选择模板，上传文件，发送。
+# ===================================================================================
+
+# --- 步骤 1: 定义元数据 ---
+local_file_report_meta = {
+    "display_name": "发送本地文件报告",
+    "description": "直接将您从本地电脑上传的文件作为附件发送。邮件内容会自动生成一段简短的说明。",
+    "fields": [
+        # 这个模板故意将字段留空，因为核心交互是文件上传组件，它在前端UI中是独立于模板字段的。
+        # 我们可以在这里加一个说明字段，让用户体验更好。
+        {
+            "name": "email_body_message",
+            "label": "邮件正文说明 (可选)",
+            "type": "textarea",
+            "default": "您好，\n\n请查收附件中的文件。\n\n此致"
+        }
+    ]
+}
+
+# --- 步骤 2: 编写模板生成函数 ---
+def get_local_file_report_template(data: dict) -> dict:
+    """
+    为本地上传的文件生成一个简单的邮件包装。
+    实际的附件处理由API层负责。
+    """
+    message = data.get("email_body_message", "请查收附件。")
+    # 将纯文本转换为带换行的HTML
+    html_content = f"<p>{message.replace(os.linesep, '<br>')}</p>"
+
+    return {
+        "subject": "来自EMinder的文件分享",
+        "html": html_content
+        # 注意：这里不返回 "attachments" 键，因为附件是从API直接处理的
+    }
+# ========================== END: 修改区域 (需求 ①) ============================
+
+
+# ===================================================================================
+# 【模板】: 自动运行脚本并获取日志结果 (保持不变)
+# ===================================================================================
+script_runner_meta = {
+    "display_name": "自动运行脚本并获取日志结果",
+    "description": "在后台非阻塞地运行指定命令，捕获其输出（日志），可选地总结日志并附加结果文件，最后将报告发送到邮箱。",
+    "fields": [
+        {
+            "name": "script_command",
+            "label": "脚本启动命令",
+            "type": "textarea",
+            "default": "python -u /path/to/your/script.py --verbose"
+        },
+        {
+            "name": "working_directory",
+            "label": "工作目录 (可选, 相对于 backend/)",
+            "type": "text",
+            "default": "."
+        },
+        {
+            "name": "attach_file_path",
+            "label": "附加文件路径 (可选, 服务器路径)",
+            "type": "text",
+            "default": "/path/to/your/output.log"
+        },
+        {
+            "name": "log_summary_prompt",
+            "label": "日志总结提示词 (可选, 留空不总结)",
+            "type": "textarea",
+            "default": "请帮我总结以下脚本的运行日志，关注其中的关键错误信息和最终结果。"
+        }
+    ]
+}
+
+# --- 步骤 2: 编写模板生成函数 (异步) ---
+async def get_script_runner_template(data: dict) -> dict:
+    """
+    执行脚本，处理日志，并生成附带附件的邮件内容。
+    这是一个异步函数，因为它需要等待脚本执行和可能的 LLM API 调用。
+    """
+    command = data.get('script_command', '').strip()
+    work_dir = data.get('working_directory', '.').strip()
+    attach_path = data.get('attach_file_path', '').strip()
+    summary_prompt = data.get('log_summary_prompt', '').strip()
+
+    if not command:
+        return {
+            "subject": "脚本执行失败：未提供命令",
+            "html": "<h4>配置错误</h4><p>您必须在'脚本启动命令'字段中提供一个有效的命令。</p>",
+            "attachments": []
+        }
+    
+    # 获取 backend/ 目录的绝对路径，用于解析相对路径
+    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    # 如果工作目录是相对路径，则基于 backend_dir 解析
+    abs_work_dir = os.path.join(backend_dir, work_dir) if not os.path.isabs(work_dir) else work_dir
+
+    # --- 执行脚本 ---
+    # `script_runner_service.run_script` 是一个 async 函数，所以需要 await
+    exec_result = await script_runner_service.run_script(command, abs_work_dir)
+
+    subject = f"脚本执行报告: {command.split()[0]} {'成功' if exec_result['success'] else '失败'}"
+    
+    # --- 构建 HTML 报告 ---
+    status_color = "#4CAF50" if exec_result['success'] else "#F44336"
+    status_text = "成功" if exec_result['success'] else "失败"
+    
+    # 将文本中的特殊 HTML 字符转义，并保留换行
+    def escape_html(text):
+        return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('\n', '<br>')
+
+    stdout_html = escape_html(exec_result.get('stdout', ''))
+    stderr_html = escape_html(exec_result.get('stderr', ''))
+
+    html_parts = [
+        f"""
+        <h4>执行详情 📊</h4>
+        <ul>
+            <li><strong>命令:</strong> <code>{command}</code></li>
+            <li><strong>工作目录:</strong> <code>{abs_work_dir}</code></li>
+            <li><strong>状态:</strong> <span style="color: {status_color}; font-weight: bold;">{status_text} (返回码: {exec_result.get('return_code')})</span></li>
+            <li><strong>开始时间:</strong> {exec_result.get('start_time', 'N/A')}</li>
+            <li><strong>结束时间:</strong> {exec_result.get('end_time', 'N/A')}</li>
+            <li><strong>总耗时:</strong> {exec_result.get('duration_seconds', 'N/A')} 秒</li>
+        </ul>
+        """
+    ]
+
+    # --- (可选) LLM 总结 ---
+    log_for_summary = exec_result.get('stdout') or exec_result.get('stderr')
+    if summary_prompt and log_for_summary:
+        full_prompt = f"{summary_prompt}\n\n--- 日志开始 ---\n{log_for_summary}\n--- 日志结束 ---"
+        summary_result = await llm_service.process_text_with_deepseek(full_prompt)
+        
+        summary_html = ""
+        if summary_result["success"]:
+            summary_html = f"<p>{escape_html(summary_result['content'])}</p>"
+        else:
+            summary_html = f"<p style='color: red;'>总结生成失败: {escape_html(summary_result['content'])}</p>"
+            
+        html_parts.append(f"<h4>智能日志摘要 📝</h4>{summary_html}")
+
+    # --- 添加日志输出 ---
+    if stdout_html:
+        html_parts.append(f"""
+        <h4>标准输出 (stdout) 📋</h4>
+        <pre style="white-space: pre-wrap; word-wrap: break-word; background-color: #f5f5f5; padding: 15px; border-radius: 8px;">{stdout_html}</pre>
+        """)
+    if stderr_html:
+        html_parts.append(f"""
+        <h4>标准错误 (stderr) ❗</h4>
+        <pre style="white-space: pre-wrap; word-wrap: break-word; background-color: #fbe9e7; color: #b71c1c; padding: 15px; border-radius: 8px;">{stderr_html}</pre>
+        """)
+
+    # --- 处理附件 ---
+    attachments_list = []
+    if attach_path:
+        # 如果附件路径是相对路径，则基于工作目录解析
+        abs_attach_path = os.path.join(abs_work_dir, attach_path) if not os.path.isabs(attach_path) else attach_path
+        
+        if os.path.exists(abs_attach_path) and os.path.isfile(abs_attach_path):
+            attachments_list.append(abs_attach_path)
+            html_parts.append(f"<p><i>✓ 已附加文件: {os.path.basename(attach_path)}</i></p>")
+        else:
+            html_parts.append(f"<p style='color: red;'><i>✗ 警告: 尝试附加的文件未找到: {abs_attach_path}</i></p>")
+            
+    return {
+        "subject": subject,
+        "html": "".join(html_parts),
+        "attachments": attachments_list # <-- 新增：返回附件路径列表
+    }
+# ===================================================================================
+# ========================== END: 修改区域 (需求 ①) ============================
 
 # ===================================================================================
 # 【新增模板】: DeepSeek 大模型工作流
@@ -360,7 +548,17 @@ def get_monthly_learning_report_template(data: dict) -> dict:
 # 字典的 `value` 是一个包含元数据和生成函数的字典。
 
 custom_templates = {
-    "deepseek_workflow": { # 【新增】注册 DeepSeek 工作流模板
+    # ========================== START: 修改区域 (需求 ①) ==========================
+    "local_file_report": { # 注册新的本地文件上传模板
+        "meta": local_file_report_meta,
+        "func": get_local_file_report_template
+    },
+    # ========================== END: 修改区域 (需求 ①) ============================
+    "script_runner": {
+        "meta": script_runner_meta,
+        "func": get_script_runner_template
+    },
+    "deepseek_workflow": {
         "meta": deepseek_workflow_meta,
         "func": get_deepseek_workflow_template
     },
