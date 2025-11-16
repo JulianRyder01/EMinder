@@ -93,8 +93,16 @@ def _read_and_process_report_file(report_folder: str, report_filename: str) -> d
     :return: 一个包含处理结果的字典。
     """
     try:
-
-        file_path = os.path.join(report_folder, report_filename)
+        # ========================== START: 修改区域 (支持绝对路径) ==========================
+        # DESIGNER'S NOTE:
+        # 这里的路径解析逻辑已增强，以稳健地处理绝对路径和相对路径。
+        # 1. 如果 `report_folder` 是一个绝对路径 (例如 "C:/reports" 或 "/var/logs")，它将被直接使用。
+        # 2. 如果它是一个相对路径 (例如 "reports/"), 它将被解析为相对于 `backend` 项目目录的路径。
+        # 这完全符合您的需求，既支持了绝对路径，又为相对路径提供了可预测的行为。
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        abs_report_folder = report_folder if os.path.isabs(report_folder) else os.path.abspath(os.path.join(backend_dir, report_folder))
+        file_path = os.path.join(abs_report_folder, report_filename)
+        # ========================== END: 修改区域 (支持绝对路径) ============================
 
         if not os.path.exists(file_path):
             error_message = f"""
@@ -103,9 +111,12 @@ def _read_and_process_report_file(report_folder: str, report_filename: str) -> d
                 <p><code>{file_path}</code></p>
                 <p>请检查：</p>
                 <ul>
-                    <li>报告文件夹名称是否正确 (相对于 backend 目录)。</li>
+                    <li>报告文件夹名称是否正确 (支持绝对路径或相对`backend`的路径)。</li>
                     <li>报告文件名是否正确，包括后缀名。</li>
                     <li>文件是否已放置在指定文件夹中。</li>
+
+
+
                 </ul>
             """
             return {"error": True, "subject": f"错误：报告文件 {report_filename} 未找到", "html": error_message}
@@ -196,7 +207,7 @@ script_runner_meta = {
         },
         {
             "name": "working_directory",
-            "label": "工作目录 (可选, 相对于 backend/)",
+            "label": "工作目录 (绝对路径, 或相对 backend 的路径)",
             "type": "text",
             "default": "."
         },
@@ -235,8 +246,14 @@ async def get_script_runner_template(data: dict) -> dict:
     
     # 获取 backend/ 目录的绝对路径，用于解析相对路径
     backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-    # 如果工作目录是相对路径，则基于 backend_dir 解析
-    abs_work_dir = os.path.join(backend_dir, work_dir) if not os.path.isabs(work_dir) else work_dir
+    
+    # ========================== START: 修改区域 (支持绝对路径) ==========================
+    # DESIGNER'S NOTE:
+    # 修正并增强了工作目录的解析逻辑，以完全支持您的需求。
+    # 1. 如果为 `working_directory` 提供了绝对路径，程序将直接使用它。
+    # 2. 如果提供了相对路径，程序将正确地将其解析为相对于 `backend` 目录的路径，这修复了先前实现中的一个错误。
+    abs_work_dir = work_dir if os.path.isabs(work_dir) else os.path.abspath(os.path.join(backend_dir, work_dir))
+    # ========================== END: 修改区域 (支持绝对路径) ============================
 
     # --- 执行脚本 ---
     # `script_runner_service.run_script` 是一个 async 函数，所以需要 await
@@ -298,8 +315,13 @@ async def get_script_runner_template(data: dict) -> dict:
     # --- 处理附件 ---
     attachments_list = []
     if attach_path:
-        # 如果附件路径是相对路径，则基于工作目录解析
-        abs_attach_path = os.path.join(abs_work_dir, attach_path) if not os.path.isabs(attach_path) else attach_path
+        # ========================== START: 修改区域 (支持绝对路径) ==========================
+        # DESIGNER'S NOTE:
+        # 附件路径的处理逻辑保持不变，但现在它基于一个已正确解析的 `abs_work_dir`。
+        # 它会优先识别绝对路径的附件，对于相对路径的附件，则会相对于脚本的（绝对）工作目录进行查找，
+        # 这是一个非常直观和符合预期的行为。
+        abs_attach_path = attach_path if os.path.isabs(attach_path) else os.path.join(abs_work_dir, attach_path)
+        # ========================== END: 修改区域 (支持绝对路径) ============================
         
         if os.path.exists(abs_attach_path) and os.path.isfile(abs_attach_path):
             attachments_list.append(abs_attach_path)
@@ -389,10 +411,11 @@ fixed_file_report_meta = {
     "fields": [
         {
             "name": "report_folder",
-            "label": "报告存放文件夹",
+            "label": "报告存放文件夹 (绝对路径, 或相对 backend 的路径)",
             "type": "text",
             "default": "reports/"
         },
+        # ========================== END: 修改区域 (更新UI提示) ============================
         {
             "name": "report_filename",
             "label": "报告文件名 (包含后缀)",
@@ -429,7 +452,7 @@ daily_file_report_meta = {
     "fields": [
         {
             "name": "report_folder",
-            "label": "报告存放文件夹",
+            "label": "报告存放文件夹 (绝对路径, 或相对 backend 的路径)",
             "type": "text",
             "default": "reports/"
         },

@@ -222,7 +222,14 @@ def send_or_schedule_email(
     template_choice: str, 
     custom_subject: str, 
     send_at: str, 
-    attachment_file: gr.File, # <-- 新增附件参数
+    # ========================== START: BUG 修复 ==========================
+    # DESIGNER'S NOTE:
+    # 修复了由 Traceback 指出的 AttributeError。
+    # 当 gr.File(type="filepath") 时，Gradio 返回的是一个字符串路径，而不是一个文件对象。
+    # 因此，函数签名中的类型提示虽然是 gr.File，但实际接收到的 `attachment_file` 是 str。
+    # 我们将直接使用这个字符串路径，而不是错误的 `attachment_file.name`。
+    attachment_file: str,
+    # ========================== END: BUG 修复 ============================
     *dynamic_field_values
 ):
     """处理立即发送或单次调度的邮件，支持附件上传。"""
@@ -246,7 +253,18 @@ def send_or_schedule_email(
         
         field_name = field["name"]
         field_type = field.get("type", "text")
-        value = dynamic_field_values[base_index + 1] if field_type == "number" else dynamic_field_values[base_index]
+
+        # 根据字段类型，从正确的位置提取值
+        if field_type == "number":
+            # 如果字段类型是 'number'，我们取 Number 组件的值。
+            # 它的索引是 base_index + 1。
+            value = dynamic_field_values[base_index + 1]
+        else: # 'text' or 'textarea'
+            # 否则，我们取 Textbox 组件的值。
+            # 它的索引是 base_index + 0。
+            value = dynamic_field_values[base_index]
+        
+        # 将字段名和正确的值关联起来
         template_data[field_name] = value
 
     # 准备表单数据
@@ -258,8 +276,15 @@ def send_or_schedule_email(
     }
     
     files = {}
-    if attachment_file is not None:
-        files["attachment"] = (os.path.basename(attachment_file.name), open(attachment_file.name, "rb"), 'application/octet-stream')
+    # ========================== START: BUG 修复 ==========================
+    # DESIGNER'S NOTE:
+    # `attachment_file` 现在被正确地当作一个字符串路径来处理。
+    if attachment_file: # 检查路径字符串是否存在
+        try:
+            files["attachment"] = (os.path.basename(attachment_file), open(attachment_file, "rb"), 'application/octet-stream')
+        except Exception as e:
+            return f"错误：无法打开附件文件 {attachment_file}。请检查文件是否存在或权限是否正确。详情: {e}"
+    # ========================== END: BUG 修复 ============================
 
     url = ""
     if action == "send_now":
@@ -429,20 +454,25 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
     )
 
     def create_email_form(is_scheduled: bool, receiver_dropdown: gr.Dropdown):
+        # 【修改2】调整标题，因为接收人选择框已移至外部
         gr.Markdown("### 2. 选择邮件模板")
         load_status = gr.Markdown()
         template_dropdown = gr.Dropdown(label="选择邮件模板", choices=["正在加载..."], interactive=False)
         
+        # 【新增】自定义标题输入框
         custom_subject_input = gr.Textbox(label="自定义邮件标题 (可选)", info="留空则使用模板默认标题", placeholder="例如：这是一封特别的邮件")
 
         gr.Markdown("### 3. 填写模板所需信息")
         
-        dynamic_form_area, max_fields = gr.Column(), 10
+        # --- 创建动态表单 ---
+        dynamic_form_area = gr.Column()
         with dynamic_form_area:
             form_description = gr.Markdown()
+            max_fields = 10
             dynamic_fields_components = []
             for i in range(max_fields):
                 with gr.Group(visible=False) as field_group:
+                    # 【修正点 #1】为不同类型使用不同组件
                     comp_text = gr.Textbox(label=f"字段{i+1}")
                     comp_num = gr.Number(label=f"字段{i+1}", visible=False)
                 dynamic_fields_components.append({"group": field_group, "text": comp_text, "number": comp_num})
@@ -489,7 +519,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
         )
 
         gr.Markdown("### 4. 附加本地文件 (可选)")
-        attachment_component = gr.File(label="拖拽文件至此或点击上传", file_count="single", type="file")
+        attachment_component = gr.File(label="拖拽文件至此或点击上传", file_count="single", type="filepath")
 
         gr.Markdown("### 5. 执行操作")
         
@@ -506,12 +536,12 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
         output_text = gr.Textbox(label="操作结果", interactive=False)
         action_button.click(
             fn=send_or_schedule_email,
-            # 【修改】在 inputs 列表中添加 custom_subject_input
-            inputs=[action_type, receiver_dropdown, template_dropdown, custom_subject_input, send_at_component] + all_field_inputs,
+            # 【修改】在 inputs 列表中添加 attachment_component
+            inputs=[action_type, receiver_dropdown, template_dropdown, custom_subject_input, send_at_component, attachment_component] + all_field_inputs,
             outputs=output_text
         )
-        # 【修改】将 custom_subject_input 添加到返回值
-        return load_status, template_dropdown, custom_subject_input, action_button, all_field_outputs, toggle_template_fields
+        # 【修改】将 custom_subject_input 和 attachment_component 添加到返回值
+        return load_status, template_dropdown, custom_subject_input, attachment_component, action_button, all_field_outputs, toggle_template_fields
 
     with gr.Tabs() as tabs:
         # --- Tab 1: 订阅管理 ---
@@ -533,12 +563,12 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
                     clear_button = gr.Button("清空表单")
 
         with gr.TabItem("手动发送邮件") as tab_manual:
-            # 【修改】接收新增的 custom_subject_input
-            manual_load_status, manual_template_dropdown, manual_custom_subject, manual_action_button, manual_all_field_outputs, manual_toggle_fn = create_email_form(is_scheduled=False, receiver_dropdown=shared_receiver_input)
+            # 【修改】接收新增的 custom_subject_input 和 attachment_component
+            manual_load_status, manual_template_dropdown, manual_custom_subject, manual_attachment, manual_action_button, manual_all_field_outputs, manual_toggle_fn = create_email_form(is_scheduled=False, receiver_dropdown=shared_receiver_input)
         
         with gr.TabItem("定时单次任务") as tab_schedule:
-            # 【修改】接收新增的 custom_subject_input
-            schedule_load_status, schedule_template_dropdown, schedule_custom_subject, schedule_action_button, schedule_all_field_outputs, schedule_toggle_fn = create_email_form(is_scheduled=True, receiver_dropdown=shared_receiver_input)
+            # 【修改】接收新增的 custom_subject_input 和 attachment_component
+            schedule_load_status, schedule_template_dropdown, schedule_custom_subject, schedule_attachment, schedule_action_button, schedule_all_field_outputs, schedule_toggle_fn = create_email_form(is_scheduled=True, receiver_dropdown=shared_receiver_input)
         
         # --- 【新增】Tab 3: 计划周期任务 ---
         with gr.TabItem("计划周期任务", id="cron_tab") as tab_cron:

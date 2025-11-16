@@ -9,3 +9,5 @@ python-multipart
 huggingface_hub==0.20.3
 croniter
 aiosmtplib==4.0.2
+pydantic[email]==2.1.1
+honcho
