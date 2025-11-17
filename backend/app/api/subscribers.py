@@ -4,11 +4,17 @@ from typing import Dict, Optional, List # <-- 新增导入 List
 from croniter import croniter
 import uuid
 import asyncio
-import json # <-- 新增导入
-import os   # <-- 新增导入
-import shutil # <-- 新增导入
+import json
+import os
+import shutil
+import logging
 from ..storage.sqlite_store import store
-from ..services.scheduler_service import scheduler_service
+# ========================== START: MODIFICATION (Async Job Execution Fix) ==========================
+# DESIGNER'S NOTE:
+# 这里的导入也得到了简化。我们不再需要 _run_async_job，
+# 只需要 scheduler_service 实例和 SchedulerService 类（用于引用静态方法）。
+from ..services.scheduler_service import scheduler_service, SchedulerService
+# ========================== END: MODIFICATION (Final Async Fix) ============================
 from ..services.email_service import email_service
 from ..templates.email_templates import template_manager
 import datetime
@@ -16,6 +22,7 @@ import pytz
 from urllib.parse import unquote
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # --- 辅助函数：处理临时文件 ---
 def save_temp_upload_file(upload_file: UploadFile) -> Optional[str]:
@@ -33,7 +40,7 @@ def save_temp_upload_file(upload_file: UploadFile) -> Optional[str]:
             
         return file_path
     except Exception as e:
-        print(f"错误：保存临时上传文件失败: {e}")
+        logger.error(f"Failed to save temporary upload file: {e}", exc_info=True)
         return None
     finally:
         upload_file.file.close()
@@ -49,7 +56,7 @@ def get_all_subscribers():
         active_subscribers = store.get_active_subscribers()
         return {"status": "success", "subscribers": active_subscribers}
     except Exception as e:
-        print(f"获取订阅者列表时出错: {e}")
+        logger.error(f"Error getting subscriber list: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="获取订阅者列表时发生内部错误。")
 
 @router.post("/subscribers")
@@ -98,13 +105,6 @@ async def delete_subscriber(email: str):
         raise HTTPException(status_code=404, detail=f"未找到邮箱为 {email} 的订阅者。")
 
 
-# ========================== START: 修改区域 (需求 ①) ==========================
-# DESIGNER'S NOTE:
-# 对 /send-now 端点进行了彻底重构，以支持文件上传。
-# - 不再接收 JSON body，而是使用 Form(...) 和 File(...) 来处理 multipart/form-data 请求。
-# - `template_data` 现在作为一个 JSON 字符串 (`template_data_str`) 传递，需要在后端解析。
-# - 如果有附件上传，会将其保存为临时文件，并将路径传递给邮件服务。
-# - 使用 BackgroundTasks 确保在邮件发送后，临时文件被可靠地删除。
 @router.post("/send-now")
 async def send_email_now(
     background_tasks: BackgroundTasks,
@@ -112,14 +112,8 @@ async def send_email_now(
     template_type: str = Form(...),
     template_data_str: str = Form(...),
     custom_subject: Optional[str] = Form(None),
-    # ========================== START: MODIFICATION (Multi-Attachment Support) ==========================
-    # DESIGNER'S NOTE: 关键变更！
-    # 将原来的单个 `attachment` 参数改为 `attachments` 列表，以接收多个文件。
-    # `File(...)` 确保了即使没有文件上传，也会得到一个空列表，而不是 None。
     attachments: List[UploadFile] = File(default=[])
-    # ========================== END: MODIFICATION (Multi-Attachment Support) ============================
 ):
-    # ... (参数校验和 template_data 解析逻辑不变) ...
     if not receiver_email or not template_type:
         raise HTTPException(status_code=422, detail="请求体中缺少 'receiver_email' 或 'template_type'。")
 
@@ -128,16 +122,12 @@ async def send_email_now(
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="无效的 template_data JSON 字符串。")
 
-    # ========================== START: MODIFICATION (Multi-Attachment Support) ==========================
-    # DESIGNER'S NOTE:
-    # 修改文件处理逻辑，以遍历附件列表并保存所有上传的文件。
     temp_file_paths = []
     if attachments:
         for attachment in attachments:
             temp_path = save_temp_upload_file(attachment)
             if temp_path:
                 temp_file_paths.append(temp_path)
-    # ========================== END: MODIFICATION (Multi-Attachment Support) ============================
     
     template_func = getattr(template_manager, template_type, None)
     
@@ -179,9 +169,7 @@ async def schedule_email_once(
     send_at_str: str = Form(...),
     template_data_str: str = Form(...),
     custom_subject: Optional[str] = Form(None),
-    # ========================== START: MODIFICATION (Multi-Attachment Support) ==========================
     attachments: List[UploadFile] = File(default=[])
-    # ========================== END: MODIFICATION (Multi-Attachment Support) ============================
 ):
     """
     调度一个一次性的邮件发送任务，支持动态模板字段和可选的文件附件。
@@ -201,24 +189,34 @@ async def schedule_email_once(
     except ValueError:
         raise HTTPException(status_code=422, detail="时间格式错误，请使用 'YYYY-MM-DD HH:MM' 格式。")
 
-    # ========================== START: MODIFICATION (Multi-Attachment Support) ==========================
     temp_file_paths = []
     if attachments:
         for attachment in attachments:
             temp_path = save_temp_upload_file(attachment)
             if temp_path:
                 temp_file_paths.append(temp_path)
-    # ========================== END: MODIFICATION (Multi-Attachment Support) ============================
+
+    job_id = f"once_{template_type}_{uuid.uuid4().hex[:8]}"
+
+    task_kwargs = {
+        "job_id": job_id,
+        "receiver_email": receiver_email,
+        "template_type": template_type,
+        "template_data": template_data,
+        "custom_subject": custom_subject,
+        "temp_file_paths": temp_file_paths,
+    }
 
     job = scheduler_service.scheduler.add_job(
-        scheduler_service.send_single_email_task, # 这个任务函数已经是 async 的
+        SchedulerService.send_single_email_task,
         trigger='date',
         run_date=aware_dt,
-        # 传递文件路径列表，而不是单个路径
-        args=[receiver_email, template_type, template_data, custom_subject, temp_file_paths],
-        id=f"once_{receiver_email}_{datetime.datetime.now().timestamp()}",
-        name=f"One-time email to {receiver_email}"
+        kwargs=task_kwargs,
+        id=job_id,
+        name=f"One-time email to {receiver_email} using template {template_type}"
     )
+    
+    logger.info(f"API: Successfully scheduled one-time job. [ID: {job.id}, RunTime: {aware_dt.strftime('%Y-%m-%d %H:%M:%S %Z')}]")
 
     return {
         "status": "success", 
@@ -255,12 +253,20 @@ async def schedule_email_cron(request: Request):
     job_id = f"cron_{template_type}_{uuid.uuid4().hex[:8]}"
     
     try:
-        # 【修改】将 custom_subject 添加到传递给任务的参数列表中
+        logger.info(f"API: Received request to schedule a new cron job. [Name: {job_name}, Cron: '{cron_string}']")
+
+        task_kwargs = {
+            "receiver_emails": receiver_emails,
+            "template_type": template_type,
+            "template_data": template_data,
+            "custom_subject": custom_subject
+        }
+        
         job = scheduler_service.add_cron_job(
             job_id=job_id,
             name=job_name,
             cron_string=cron_string,
-            args=[receiver_emails, template_type, template_data, custom_subject]
+            task_kwargs=task_kwargs # <-- 核心改变：传递字典
         )
         return {
             "status": "success",
@@ -268,7 +274,8 @@ async def schedule_email_cron(request: Request):
             "job_id": job.id
         }
     except ValueError as e:
+        logger.warning(f"API: Failed to schedule cron job '{job_name}' due to validation error: {e}")
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        print(f"调度周期任务时发生错误: {e}")
+        logger.error(f"API: An unexpected error occurred while scheduling cron job '{job_name}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"调度任务时发生内部错误: {str(e)}")

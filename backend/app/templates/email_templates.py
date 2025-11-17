@@ -15,77 +15,101 @@ class TemplateManager:
     新增了元数据(metadata)功能，以便API可以向前端提供模板信息。
     """
     
-    # --- 模板元数据定义 ---
-    # 这是实现前端动态化的核心。
-    # 每个模板的key是其方法名去除 'get_' 和 '_template' 的部分。
     def __init__(self):
-        self._templates_metadata = {
-        "daily_summary": {
-            "display_name": "每日游戏化总结",
-            "description": "发送每日任务完成情况、等级和待办事项的总结。",
-            "fields": [
-                {"name": "player_name", "label": "玩家名称", "type": "text", "default": "勇士"},
-                {"name": "tasks_completed", "label": "今日完成任务数", "type": "number", "default": 5},
-                {"name": "level", "label": "当前等级", "type": "text", "default": "15"},
-                {"name": "progress", "label": "今日进度（0-100）", "type": "number", "default": 75},
-                {"name": "todo_list", "label": "明日待办 (用英文逗号,分隔)", "type": "textarea", "default": "完成报告,学习Gradio,锻炼30分钟"},
-            ]
-        },
-        "project_update": {
-            "display_name": "项目周报",
-            "description": "用于发送项目进度、已完成任务和后续计划的周报。",
-            "fields": [
-                {"name": "project_name", "label": "项目名称", "type": "text", "default": "EMinder 开发"},
-                {"name": "reporter_name", "label": "报告人", "type": "text", "default": "项目经理"},
-                {"name": "completed_tasks", "label": "本周完成内容 (用英文逗号,分隔)", "type": "textarea", "default": "后端模板动态化,前端UI重构"},
-                {"name": "next_week_plan", "label": "下周计划 (用英文逗号,分隔)", "type": "textarea", "default": "增加持久化存储,编写单元测试"},
-            ]
-        },
-        "motivational_quote": {
-            "display_name": "每日激励",
-            "description": "每天发送一句激励人心的名言警句。",
-            "fields": [
-                {"name": "recipient_name", "label": "接收者昵称", "type": "text", "default": "朋友"},
-                {"name": "quote_content", "label": "名言内容", "type": "textarea", "default": "The only way to do great work is to love what you do."},
-                {"name": "quote_author", "label": "名言作者", "type": "text", "default": "Steve Jobs"},
-            ]
-        },
-        "weekly_report": {
-            "display_name": "通用周报（旧）",
-            "description": "一个简单的通用周报模板。",
-            "fields": [
-                {"name": "player_name", "label": "玩家名称", "type": "text", "default": "勇士"},
-                {"name": "report_content", "label": "周报内容", "type": "textarea", "default": "本周主要完成了项目A的冲刺，并规划了下周的学习计划。"},
-            ]
-        }
-    }
-        # --- 内置模板的生成函数映射 ---
-        self._template_functions = {
-            "daily_summary": self.get_daily_summary_template,
-            "project_update": self.get_project_update_template,
-            "motivational_quote": self.get_motivational_quote_template,
-            "weekly_report": self.get_weekly_report_template
+        # ========================== START: MODIFICATION (Decisive Async Fix) ==========================
+        # DESIGNER'S NOTE:
+        # 这是解决 TypeError 的核心重构。我们不再分开处理内置模板和自定义模板，
+        # 而是将它们全部统一到一个数据结构中，然后用一个循环来确保每一个模板
+        # 都被我们的异步包装器 `_apply_base_template` 正确地包装。
+        # 这消除了之前存在的逻辑不一致性，保证了任何对 template_func 的调用都返回一个可等待对象。
+
+        # 步骤 1: 将所有模板的元数据和原始函数集中定义。
+        all_templates_definitions = {
+            "daily_summary": {
+                "meta": {
+                    "display_name": "每日游戏化总结",
+                    "description": "发送每日任务完成情况、等级和待办事项的总结。",
+                    "fields": [
+                        {"name": "player_name", "label": "玩家名称", "type": "text", "default": "勇士"},
+                        {"name": "tasks_completed", "label": "今日完成任务数", "type": "number", "default": 5},
+                        {"name": "level", "label": "当前等级", "type": "text", "default": "15"},
+                        {"name": "progress", "label": "今日进度（0-100）", "type": "number", "default": 75},
+                        {"name": "todo_list", "label": "明日待办 (用英文逗号,分隔)", "type": "textarea", "default": "完成报告,学习Gradio,锻炼30分钟"},
+                    ]
+                },
+                "func": self.get_daily_summary_template
+            },
+            "project_update": {
+                "meta": {
+                    "display_name": "项目周报",
+                    "description": "用于发送项目进度、已完成任务和后续计划的周报。",
+                    "fields": [
+                        {"name": "project_name", "label": "项目名称", "type": "text", "default": "EMinder 开发"},
+                        {"name": "reporter_name", "label": "报告人", "type": "text", "default": "项目经理"},
+                        {"name": "completed_tasks", "label": "本周完成内容 (用英文逗号,分隔)", "type": "textarea", "default": "后端模板动态化,前端UI重构"},
+                        {"name": "next_week_plan", "label": "下周计划 (用英文逗号,分隔)", "type": "textarea", "default": "增加持久化存储,编写单元测试"},
+                    ]
+                },
+                "func": self.get_project_update_template
+            },
+            "motivational_quote": {
+                "meta": {
+                    "display_name": "每日激励",
+                    "description": "每天发送一句激励人心的名言警句。",
+                    "fields": [
+                        {"name": "recipient_name", "label": "接收者昵称", "type": "text", "default": "朋友"},
+                        {"name": "quote_content", "label": "名言内容", "type": "textarea", "default": "The only way to do great work is to love what you do."},
+                        {"name": "quote_author", "label": "名言作者", "type": "text", "default": "Steve Jobs"},
+                    ]
+                },
+                "func": self.get_motivational_quote_template
+            },
+            "weekly_report": {
+                "meta": {
+                    "display_name": "通用周报（旧）",
+                    "description": "一个简单的通用周报模板。",
+                    "fields": [
+                        {"name": "player_name", "label": "玩家名称", "type": "text", "default": "勇士"},
+                        {"name": "report_content", "label": "周报内容", "type": "textarea", "default": "本周主要完成了项目A的冲刺，并规划了下周的学习计划。"},
+                    ]
+                },
+                "func": self.get_weekly_report_template
+            }
         }
 
-        # =============================================================================
-        # --- 合并自定义模板 ---
-        # 如果 custom_templates 被成功导入，就将其内容合并到主模板列表中。
-        try:
-            if 'custom_templates' in locals() or 'custom_templates' in globals():
-                for key, template_data in custom_templates.items():
-                    self._templates_metadata[key] = template_data["meta"]
-                    
-                    original_func = template_data["func"]
-                    
-                    # 我们不再直接存储原始函数，而是创建一个新的、被包装过的函数。
-                    # functools.partial 会创建一个新函数，该函数在被调用时，
-                    # 会自动先调用 self._apply_base_template，并将原始函数作为第一个参数传入。
-                    self._template_functions[key] = functools.partial(self._apply_base_template, original_func)
-                    
-                print(f"✅ 成功加载并自动包装 {len(custom_templates)} 个自定义模板！")
-        except NameError:
-            pass
-        # =============================================================================
+        # 步骤 2: 将自定义模板合并到主定义列表中。
+        # 如果 `custom_templates` 中有与内置模板同名的 key，它将会覆盖内置模板。
+        all_templates_definitions.update(custom_templates)
+        
+        # 步骤 3: 初始化用于存储最终结果的实例变量。
+        self._templates_metadata = {}
+        self._template_functions = {}
+
+        # 步骤 4: 遍历所有模板定义，进行统一的异步包装。
+        for key, definition in all_templates_definitions.items():
+            meta = definition.get("meta")
+            original_func = definition.get("func")
+
+            if not (meta and original_func):
+                print(f"警告：模板 '{key}' 的定义不完整，已跳过。")
+                continue
+
+            # 存储元数据
+            self._templates_metadata[key] = meta
+            
+            # 创建一个被异步包装器包裹的新函数
+            wrapped_func = functools.partial(self._apply_base_template, original_func)
+            
+            # 存储这个保证可 await 的函数
+            self._template_functions[key] = wrapped_func
+            
+            # 同时将其设置为实例的一个属性，以便 `getattr` 可以直接调用
+            setattr(self, key, wrapped_func)
+
+        if custom_templates:
+            print(f"✅ 成功加载并统一包装了 {len(custom_templates)} 个自定义模板！")
+        # ========================== END: MODIFICATION (Decisive Async Fix) ============================
+
 
     def get_template_function(self, template_type: str):
         """根据模板类型获取对应的生成函数"""
@@ -95,15 +119,10 @@ class TemplateManager:
         """返回所有模板的元数据"""
         return self._templates_metadata
 
-    
-    # 对 `_apply_base_template` 包装器进行了关键修改，使其能够识别并传递内嵌图片信息。
-    # - 原始模板函数现在可以返回一个包含 `subject`, `html`, 可选 `attachments` 和可选 `embedded_images` 键的字典。
-    # - 这个包装器会将 `embedded_images` 键原样传递到最终的返回结果中，
-    #   这样调度器服务就能获取到图片列表并将其最终传递给邮件服务。
     async def _apply_base_template(self, original_function, data: dict) -> dict:
         """
         【异步改造 & 功能增强】执行一个原始模板函数，并将其输出用基础HTML样式进行包装。
-        此函数现在是异步的，可以处理同步和异步的原始模板函数，并能传递附件信息。
+        此函数现在是异步的，可以处理同步和异步的原始模板函数，并能传递附件和内嵌图片信息。
         """
         # 1. 检查原始函数是否为协程函数，并相应地调用它
         if asyncio.iscoroutinefunction(original_function):
@@ -192,6 +211,7 @@ class TemplateManager:
             <p>如果您没有请求此订阅，请直接忽略并删除本邮件。</p>
             <p>此致,<br>EMinder 团队</p>
         """
+        # 注意：这个模板是直接调用的，所以它自己要包装HTML
         return {"subject": subject, "html": self.get_base_html(content, title)}
 
     def get_daily_summary_template(self, data: dict) -> dict:
@@ -245,13 +265,13 @@ class TemplateManager:
             {todo_list_html if any(item.strip() for item in todo_items) else "<p>暂无待办事项，请注意添加。</p>"}
             <p>继续努力，明天会更好！</p>
         """
-        return {"subject": subject, "html": self.get_base_html(content, title)}
+        # 只返回核心内容，包装器会处理外层样式
+        return {"subject": subject, "html": content}
 
     def get_project_update_template(self, data: dict) -> dict:
         """【新模板】生成项目周报邮件"""
         subject = f"项目周报 - {data.get('project_name', '未命名项目')}"
-        title = f"📑 {data.get('project_name', '项目')} 周报"
-
+        
         completed_tasks_items = str(data.get("completed_tasks", "")).split(',')
         completed_tasks_html = "<ul>" + "".join([f"<li>{item.strip()}</li>" for item in completed_tasks_items if item.strip()]) + "</ul>"
 
@@ -262,18 +282,17 @@ class TemplateManager:
             <p>您好！</p>
             <p>这是 <strong>{data.get('project_name', '项目')}</strong> 的本周进展报告。</p>
             <h4>本周完成内容:</h4>
-            {completed_tasks_html if completed_tasks_items else "<p>本周无已完成任务记录。</p>"}
+            {completed_tasks_html if any(s.strip() for s in completed_tasks_items) else "<p>本周无已完成任务记录。</p>"}
             <h4>下周计划:</h4>
-            {next_week_plan_html if next_week_plan_items else "<p>下周计划待定。</p>"}
+            {next_week_plan_html if any(s.strip() for s in next_week_plan_items) else "<p>下周计划待定。</p>"}
             <br>
             <p>报告人: {data.get('reporter_name', 'N/A')}</p>
         """
-        return {"subject": subject, "html": self.get_base_html(content, title)}
+        return {"subject": subject, "html": content}
 
     def get_motivational_quote_template(self, data: dict) -> dict:
         """【新模板】生成每日激励邮件"""
         subject = "EMinder 温馨提醒：新的一天，加油！"
-        title = "✨ 每日激励"
         content = f"""
             <p>您好, {data.get("recipient_name", "朋友")}！</p>
             <p>希望这句话能给你带来力量：</p>
@@ -283,26 +302,17 @@ class TemplateManager:
             </div>
             <p>祝您拥有美好的一天！</p>
         """
-        return {"subject": subject, "html": self.get_base_html(content, title)}
+        return {"subject": subject, "html": content}
         
     def get_weekly_report_template(self, data: dict) -> dict:
         """【示例】生成周报邮件（旧版，保留作为示例）"""
         subject = "EMinder 周报"
-        title = "本周回顾"
         content = f"""
             <p>您好, {data.get("player_name", "玩家")}！</p>
             <p>这是您的本周报告...</p>
             <p>{data.get("report_content", "")}</p>
         """
-        return {"subject": subject, "html": self.get_base_html(content, title)}
+        return {"subject": subject, "html": content}
 
 # 创建一个全局模板管理器实例
 template_manager = TemplateManager()
-
-# --- 为了让 scheduler_service.py 中的旧调用方式继续工作 ---
-# 我们需要动态地将注册的模板函数绑定到 template_manager 实例上
-# 这样 `getattr(template_manager, f"get_{template_type}_template")` 就能找到它们
-for key, func in template_manager._template_functions.items():
-    # 注意：这里我们不再为函数名添加 get_ 和 _template 前缀
-    # 需要同步修改 `subscribers.py` 和 `scheduler_service.py` 的调用逻辑
-    setattr(template_manager, key, func)

@@ -6,3 +6,4 @@ __pycache__/
 directory_listing_with_content.txt
 backend/eminder.db
 Procfile
+*.log

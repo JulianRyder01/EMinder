@@ -1,14 +1,31 @@
 # backend/app/services/scheduler_service.py (已修正序列化错误)
 import datetime
 import asyncio
-import os # <-- 新增导入
-from apscheduler.schedulers.background import BackgroundScheduler
+import os
+# ========================== START: MODIFICATION (Async Job Execution Fix) ==========================
+# DESIGNER'S NOTE: 导入 functools 用于更灵活地创建可调用对象，这是我们通用包装器的一部分。
+import functools
+# ========================== END: MODIFICATION (Async Job Execution Fix) ============================
+import logging
+# ========================== START: MODIFICATION (Final Async Fix) ==========================
+# DESIGNER'S NOTE:
+# 关键变更：我们不再使用为多线程环境设计的 BackgroundScheduler，
+# 而是切换到为 asyncio 应用量身打造的 AsyncIOScheduler。
+# 这将从根本上解决 "coroutine was never awaited" 的问题。
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+# ========================== END: MODIFICATION (Final Async Fix) ============================
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from croniter import croniter
 from ..core.config import settings
 from .email_service import email_service
 from ..templates.email_templates import template_manager
 from ..storage.sqlite_store import store
+
+# ========================== START: MODIFICATION (Logging) ==========================
+# DESIGNER'S NOTE: 获取一个 logger 实例，用于记录此模块中的事件。
+logger = logging.getLogger(__name__)
+# ========================== END: MODIFICATION (Logging) ============================
+
 
 # --- 【核心修正点】 ---
 # 将执行周期性任务的逻辑移到一个独立的、顶级的函数中。
@@ -63,52 +80,70 @@ async def _send_recurring_emails_task():
     
     print("--- 定时邮件发送任务执行完毕 ---\n")
 
-async def _send_custom_cron_email_task(receiver_emails: list[str], template_type: str, data: dict, custom_subject: str = None):
+async def _send_custom_cron_email_task(**kwargs):
     """
-    【异步改造 & 功能增强】根据指定的参数，向一个邮件列表发送模板邮件。
-    这是一个独立的函数，用于用户自定义的周期性任务。
-    增加了 custom_subject 参数和附件处理能力。
+    【重构】这是一个独立的函数，用于用户自定义的周期性任务。
+    现在通过 kwargs 接收所有参数。
     """
-    print(f"\n[{datetime.datetime.now()}] --- 开始执行自定义周期任务: 发送 '{template_type}' ---")
-    
-    if not receiver_emails:
-        print("邮件接收者列表为空，本次任务结束。")
-        return
-        
-    template_func = getattr(template_manager, template_type, None)
-    if not template_func:
-        print(f"警告：在执行自定义周期任务时，未找到模板 '{template_type}'。")
-        return
+    # 从 kwargs 中安全地提取参数
+    job_id = kwargs.get("job_id", "unknown_id")
+    job_name = kwargs.get("job_name", "untitled_cron")
+    receiver_emails = kwargs.get("receiver_emails", [])
+    template_type = kwargs.get("template_type")
+    data = kwargs.get("template_data", {})
+    custom_subject = kwargs.get("custom_subject")
 
-    # 检查模板函数是否为异步
-    if asyncio.iscoroutinefunction(template_func):
+    logger.info(f"Executing cron job: [ID: {job_id}, Name: {job_name}]. Sending template '{template_type}' to {len(receiver_emails)} recipients.")
+    try:
+    # ========================== END: MODIFICATION (Logging) ============================
+        if not receiver_emails:
+            logger.warning(f"Cron job [ID: {job_id}] skipped: Recipient list is empty.")
+            return
+            
+        if not template_type:
+            logger.error(f"Cron job [ID: {job_id}] failed: Template type was not provided.")
+            return
+
+        template_func = getattr(template_manager, template_type, None)
+        if not template_func:
+            logger.error(f"Cron job [ID: {job_id}] failed: Template '{template_type}' not found.")
+            return
+
+        # 检查模板函数是否为异步
         email_content = await template_func(data)
-    else:
-        email_content = template_func(data)
-    
-    # 【修改】如果提供了自定义标题，则使用它；否则，使用模板的默认标题。
-    final_subject = custom_subject if custom_subject else email_content["subject"]
-    
-    # 从模板函数的返回结果中提取附件路径列表 (新)
-    attachments_to_send = email_content.get("attachments", [])
-    
-    print(f"准备向 {len(receiver_emails)} 位接收者发送邮件 (标题: '{final_subject}'): {', '.join(receiver_emails)}")
-    
-    tasks = []
-    for email in receiver_emails:
-        task = email_service.send_email(
-            receiver_email=email,
-            subject=final_subject,
-            html_content=email_content["html"],
-            attachments=attachments_to_send
-        )
-        tasks.append(task)
         
-    # 并发执行所有邮件发送任务
-    if tasks:
-        await asyncio.gather(*tasks)
-    
-    print("--- 自定义周期任务执行完毕 ---\n")
+        # 【修改】如果提供了自定义标题，则使用它；否则，使用模板的默认标题。
+        final_subject = custom_subject if custom_subject else email_content["subject"]
+        
+        # 从模板函数的返回结果中提取附件路径列表 (新)
+        attachments_to_send = email_content.get("attachments", [])
+        embedded_images_to_send = email_content.get("embedded_images", [])
+
+        tasks = []
+        for email in receiver_emails:
+            task = email_service.send_email(
+                receiver_email=email,
+                subject=final_subject,
+                html_content=email_content["html"],
+                attachments=attachments_to_send,
+                embedded_images=embedded_images_to_send,
+            )
+            tasks.append(task)
+            
+        # 并发执行所有邮件发送任务
+        if tasks:
+            await asyncio.gather(*tasks)
+        
+        # ========================== START: MODIFICATION (Logging) ==========================
+        logger.info(f"Cron job [ID: {job_id}, Name: {job_name}] executed successfully.")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred in cron job [ID: {job_id}, Name: {job_name}]: {e}", exc_info=True)
+
+# ========================== START: MODIFICATION (Async Job Execution Fix) ==========================
+# DESIGNER'S NOTE:
+# 上一版方案中的 _run_async_job 同步包装器现在已完全没有必要，
+# 因为 AsyncIOScheduler 本身就在正确的事件循环中运行。我们将其彻底移除。
+# ========================== END: MODIFICATION (Final Async Fix) ============================
 
 
 class SchedulerService:
@@ -117,30 +152,36 @@ class SchedulerService:
         jobstores = {
             'default': SQLAlchemyJobStore(url=settings.DATABASE_URL)
         }
-        # BackgroundScheduler 同样支持调度异步任务
-        self.scheduler = BackgroundScheduler(jobstores=jobstores, timezone="Asia/Taipei")
+        # ========================== START: MODIFICATION (Final Async Fix) ==========================
+        # DESIGNER'S NOTE:
+        # 使用 AsyncIOScheduler 替换 BackgroundScheduler。
+        # 它会自动使用当前线程的事件循环，与 FastAPI 完美集成。
+        self.scheduler = AsyncIOScheduler(jobstores=jobstores, timezone="Asia/Taipei")
+        # ========================== END: MODIFICATION (Final Async Fix) ============================
+        logger.info(f"Scheduler initialized with timezone '{self.scheduler.timezone}' and job store '{settings.DATABASE_URL}'.")
+        # ========================== END: MODIFICATION (Logging) ============================
+
 
     # 【修改点】原有的 _send_scheduled_emails 实例方法已被上面的顶级函数替代，故删除。
 
     @staticmethod
-    # ========================== START: MODIFICATION (Multi-Attachment Support) ==========================
-    # DESIGNER'S NOTE:
-    # 修改了此任务函数的签名，将 `temp_file_path: str` 改为 `temp_file_paths: list`。
-    # 内部逻辑也相应地修改为遍历这个列表来处理和清理所有临时文件。
-    async def send_single_email_task(
-        receiver_email: str, 
-        template_type: str, 
-        data: dict, 
-        custom_subject: str = None, 
-        temp_file_paths: list = None
-    ):
-    # ========================== END: MODIFICATION (Multi-Attachment Support) ============================
-        """
-        【功能增强】这是一个静态方法，专门被 APScheduler 调用来执行一次性任务。
-        它现在能处理多个临时上传的附件。
-        """
+    # ========================== START: MODIFICATION (Refactor to kwargs) ==========================
+    async def send_single_email_task(**kwargs):
+        """【重构】这是一个静态方法，专门被 APScheduler 调用来执行一次性任务。"""
+        job_id = kwargs.get("job_id", "unknown_id")
+        receiver_email = kwargs.get("receiver_email")
+        template_type = kwargs.get("template_type")
+        data = kwargs.get("template_data", {})
+        custom_subject = kwargs.get("custom_subject")
+        temp_file_paths = kwargs.get("temp_file_paths", [])
+
+        logger.info(f"Executing one-time job: [ID: {job_id}]. Sending template '{template_type}' to '{receiver_email}'.")
+        # ========================== END: MODIFICATION (Logging) ============================
         try:
-            print(f"执行一次性任务：向 {receiver_email} 发送 '{template_type}' 模板邮件。")
+            if not receiver_email or not template_type:
+                logger.error(f"One-time job [ID: {job_id}] failed: Missing receiver_email or template_type.")
+                return
+
             template_func = getattr(template_manager, template_type, None)
             if template_func:
                 email_content = await template_func(data)
@@ -160,56 +201,72 @@ class SchedulerService:
                     attachments=final_attachments,
                     embedded_images=email_content.get("embedded_images", [])
                 )
+                logger.info(f"One-time job [ID: {job_id}] executed successfully.")
             else:
-                print(f"错误：在执行一次性任务时，未找到模板 '{template_type}'。")
+                logger.error(f"One-time job [ID: {job_id}] failed: Template '{template_type}' not found.")
+        except Exception as e:
+            logger.error(f"An unexpected error occurred in one-time job [ID: {job_id}]: {e}", exc_info=True)
         finally:
-            # 关键：确保任务执行完毕后，删除所有临时上传的文件
             if temp_file_paths:
                 for temp_path in temp_file_paths:
                     if os.path.exists(temp_path):
                         try:
                             os.remove(temp_path)
-                            print(f"成功清理临时文件: {temp_path}")
+                            logger.info(f"Job [ID: {job_id}]: Successfully cleaned up temporary file: {temp_path}")
                         except Exception as e:
-                            print(f"警告：清理临时文件 {temp_path} 失败: {e}")
-    # ========================== END: 修改区域 (需求 ①) ============================
+                            logger.warning(f"Job [ID: {job_id}]: Failed to clean up temporary file {temp_path}: {e}")
     
-    def add_cron_job(self, job_id: str, name: str, cron_string: str, args: list):
-        """
-        【新增】添加一个由 Cron 表达式定义的周期性任务。
-        """
+    def add_cron_job(self, job_id: str, name: str, cron_string: str, task_kwargs: dict):
+        """【重构】添加一个由 Cron 表达式定义的周期性任务，使用 kwargs 传递参数。"""
         if not croniter.is_valid(cron_string):
+            logger.error(f"Failed to add cron job '{name}'. Invalid cron string: '{cron_string}'")
             raise ValueError(f"无效的 Cron 表达式: '{cron_string}'")
 
         parts = cron_string.split()
         if len(parts) != 5:
+            logger.error(f"Failed to add cron job '{name}'. Cron string must have 5 parts: '{cron_string}'")
             raise ValueError("Cron 表达式必须包含5个部分 (分 时 日 月 周)。")
         
-        cron_kwargs = {
-            'minute': parts[0],
-            'hour': parts[1],
-            'day': parts[2],
-            'month': parts[3],
-            'day_of_week': parts[4]
-        }
-        
-        # add_job 会自动检测到 _send_custom_cron_email_task 是协程并正确地执行它
+        task_kwargs['job_id'] = job_id
+        task_kwargs['job_name'] = name
+
+        # ========================== START: MODIFICATION (Final Async Fix) ==========================
+        # DESIGNER'S NOTE:
+        # 因为我们现在处于一个纯粹的异步环境中，我们可以直接将异步任务函数 `_send_custom_cron_email_task`
+        # 添加到调度器。不再需要任何包装器或技巧。APScheduler 会自动 await 它。
         job = self.scheduler.add_job(
             _send_custom_cron_email_task,
             'cron',
             id=job_id,
             name=name,
-            args=args,
+            kwargs=task_kwargs,
             replace_existing=True,
-            **cron_kwargs
+            # 直接将 cron 的各个部分作为关键字参数传递
+            minute=parts[0],
+            hour=parts[1],
+            day=parts[2],
+            month=parts[3],
+            day_of_week=parts[4]
         )
-        print(f"已成功添加新的周期任务: [ID: {job.id}, Name: {name}, Cron: '{cron_string}']")
+        logger.info(f"Successfully added/updated cron job: [ID: {job.id}, Name: {name}, Cron: '{cron_string}']")
         return job
             
     def start(self):
         """添加任务并启动调度器"""
         # ========================== START: 修改区域 (需求 ②) ==========================
         # DESIGNER'S NOTE:
+        # 在服务启动时（这个方法被 FastAPI 的 startup 事件调用），
+        # 我们安全地获取当前正在运行的 asyncio 事件循环，并将其存储在实例中。
+        # 这是让后台线程能够与主线程通信的关键一步。
+        try:
+            self.loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # 这是一个备用方案，以防在非asyncio上下文中意外启动此服务。
+            logger.warning("No running event loop found. Creating a new one for the scheduler.")
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+        # ========================== END: MODIFICATION (Async Job Execution Fix) ============================
+        
         # 根据用户需求，注释掉在后端启动时自动添加的“每日总结”周期性任务。
         # 用户现在可以通过前端UI来添加所有周期性任务，这样更加灵活。
         # 如果未来需要恢复此功能，只需取消下面的注释即可。
@@ -229,16 +286,14 @@ class SchedulerService:
         # ========================== END: 修改区域 (需求 ②) ============================
         
         self.scheduler.start()
-        print(f"后台调度器已启动。所有任务将持久化到数据库: {settings.DATABASE_URL}")
-        
-        # 由于默认任务已移除，此打印信息也不再需要
-        # print(f"每日邮件任务将按 CRON 表达式 '{settings.DAILY_SUMMARY_CRON}' 执行。")
+        # 更新日志消息以反映新的调度器类型
+        logger.info(f"AsyncIO scheduler started successfully. Jobs are persisted to the database.")
 
     def shutdown(self):
         """安全关闭调度器"""
         if self.scheduler.running:
             self.scheduler.shutdown()
-            print("后台调度器已关闭。")
+            logger.info("AsyncIO scheduler has been shut down.")
 
 # 创建一个全局调度服务实例
 scheduler_service = SchedulerService()

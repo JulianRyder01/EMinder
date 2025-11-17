@@ -129,38 +129,42 @@ def get_jobs_list():
         formatted_data = []
         for job in jobs:
             receiver = "查看参数"
+            job_kwargs = job.get('kwargs', {}) # 安全地获取 kwargs
             job_type = job.get("job_type", "unknown")
-            # ========================== START: 错误修复区域 ==========================
-            # MODIFIED: 将 run_time 的初始化移至 if 判断外部
-            # 确保即使 job 中没有 'args' 字段，run_time 变量也已经被赋值，避免 UnboundLocalError
+            
+            if job_type == 'date':
+                receiver = job_kwargs.get('receiver_email', 'N/A')
+            elif job_type == 'cron':
+                receivers_list = job_kwargs.get('receiver_emails', [])
+                receiver = f"{len(receivers_list)}个用户" if receivers_list else "无"
             run_time = "N/A"
             # ========================== END: 错误修复区域 ============================
-
-            if job.get('args'):
-                if job_type == 'date':
-                    receiver = job['args'][0]
-                elif job.get('name', '').startswith('每日总结'):
-                    receiver = "所有已订阅用户"
-                else: # Custom cron
-                    if isinstance(job['args'][0], list):
-                        receiver = f"{len(job['args'][0])}个用户"
-                    else:
-                        receiver = str(job['args'][0])
-
-                if job['next_run_time']:
+            if job['next_run_time']:
                     # 尝试解析带时区或不带时区的时间字符串
                     try:
                         dt_object = datetime.datetime.fromisoformat(job['next_run_time'])
                         run_time = dt_object.strftime('%Y-%m-%d %H:%M:%S %Z')
                     except ValueError:
                         run_time = job['next_run_time']
-            # 注意：原代码中 run_time 的初始化是在 if job.get('args') 内部，现已移出
-            
+
+            if job_type == 'date':
+                receiver = job_kwargs.get('receiver_email', '未知')
+            elif job_type == 'cron':
+                # 内置的每日总结任务可能没有 receiver_emails，特殊处理
+                if job.get('name') == '每日总结 (周期性)':
+                    receiver = "所有已订阅用户"
+                else:
+                    receivers_list = job_kwargs.get('receiver_emails', [])
+                    receiver = f"{len(receivers_list)} 个用户" if receivers_list else "无"
+            else:
+                # 对旧的或未知的任务类型做一个兼容显示
+                receiver = job.get('name') 
+
             formatted_data.append({
                 "任务ID": job['id'],
                 "任务名称": job['name'],
                 "类型": {"date": "一次性", "cron": "周期性"}.get(job_type, "未知"),
-                "下次运行时间": run_time,
+                "下次运行时间": run_time, # <- 使用我们正确处理后的 run_time
                 "发送目标": receiver,
             })
         
@@ -843,7 +847,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
 
         # 如果没有选中任何行 (例如点击了表头)，也直接返回
         # 如果没有选中任何行，隐藏编辑区域并返回正确数量的更新对象
-        if evt.index is None:
+        if not isinstance(df_input, pd.DataFrame) or df_input.empty or evt.index is None:
             # 返回45个 "no change" 更新
             return [gr.update()] * TOTAL_OUTPUTS
 
@@ -858,7 +862,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
             # MODIFIED: 安全地处理任务参数(args)，防止因参数列表长度不足而崩溃。
             # 内置的“每日总结”任务没有参数，因此在这里需要特殊处理。
             job_args = job.get("args", [])
-            if len(job_args) < 4:
+            if not all(k in job for k in ['template_type', 'template_data']):
                 gr.Info(f"任务 '{job.get('name')}' 是一个内置的系统任务或参数不完整，不支持编辑。但你仍然可以取消它。")
                 # 必须为所有45个输出组件返回一个更新。
                 # 我们只更新 Job ID 输入框，并确保编辑区域是隐藏的。
@@ -875,7 +879,9 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
             edit_job_type_state_update = job["trigger_type"]
             
             # 从现在已确认安全的 job_args 列表中解包参数
-            template_key, template_data, custom_subject = job_args[1], job_args[2], job_args[3]
+            template_key = job.get("template_type")
+            template_data = job.get("template_data", {})
+            custom_subject = job.get("custom_subject")
             
             template_display_name = get_display_name_from_template_key(template_key)
             edit_template_dropdown_update = gr.update(value=template_display_name)
@@ -892,13 +898,13 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
 
             # --- 步骤 2: 根据任务类型填充特定字段 ---
             if job["trigger_type"] == 'cron':
-                receivers = find_selections_from_emails(job_args[0])
+                receivers = find_selections_from_emails(job.get("receiver_emails", []))
                 edit_cron_group_update = gr.update(visible=True)
                 edit_cron_name_update = job["name"]
                 edit_cron_string_update = job["cron_string"]
                 edit_cron_subscribers_update = gr.update(value=receivers)
             elif job["trigger_type"] == 'date':
-                receiver = find_selection_from_email(job_args[0])
+                receiver = find_selection_from_email(job.get("receiver_email", ""))
                 edit_date_group_update = gr.update(visible=True)
                 edit_date_receiver_update = gr.update(value=receiver)
                 edit_date_send_at_update = job["run_date"]

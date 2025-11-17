@@ -1,6 +1,7 @@
 # backend/app/api/jobs.py
 from fastapi import APIRouter, HTTPException, Body
 from typing import Dict, Any
+import logging
 from ..services.scheduler_service import scheduler_service
 from apscheduler.jobstores.base import JobLookupError
 from apscheduler.triggers.cron import CronTrigger
@@ -8,12 +9,10 @@ from apscheduler.triggers.date import DateTrigger
 import datetime
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 @router.get("/jobs")
 def get_scheduled_jobs():
-    """
-    【修改点】获取所有当前计划中的任务，包括一次性和周期性任务。
-    """
     jobs_list = []
     # 遍历所有任务，不再进行 trigger 类型过滤
     for job in scheduler_service.scheduler.get_jobs():
@@ -32,8 +31,9 @@ def get_scheduled_jobs():
             "name": job.name,
             "job_type": job_type, # 新增字段，方便前端区分
             "next_run_time": run_time_str,
-            "args": job.args, # 任务执行时所需的参数
-            "trigger": str(job.trigger), # 返回触发器的字符串表示
+            # <--- 核心修正 1: 返回 job.kwargs 而不是 job.args
+            "kwargs": job.kwargs,
+            "trigger": str(job.trigger),
         })
             
     return {"status": "success", "jobs": jobs_list}
@@ -51,7 +51,7 @@ def get_job_details(job_id: str):
         job_details = {
             "id": job.id,
             "name": job.name,
-            "args": job.args,
+            **job.kwargs  # <--- 使用字典解包，将所有任务参数包含进来
         }
 
         if isinstance(job.trigger, DateTrigger):
@@ -77,7 +77,7 @@ def get_job_details(job_id: str):
     except JobLookupError:
         raise HTTPException(status_code=404, detail=f"未找到ID为 {job_id} 的任务。")
     except Exception as e:
-        print(f"获取任务详情 {job_id} 时发生错误: {e}")
+        logger.error(f"Error getting details for job '{job_id}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取任务详情时发生错误: {str(e)}")
 
 @router.put("/jobs/{job_id}")
@@ -100,35 +100,39 @@ async def update_scheduled_job(job_id: str, payload: Dict[str, Any] = Body(...))
 
             try:
                 naive_dt = datetime.datetime.strptime(run_date_str, "%Y-%m-%d %H:%M")
-                tz = scheduler_service.scheduler.timezone
-                aware_dt = tz.localize(naive_dt)
+                aware_dt = scheduler_service.scheduler.timezone.localize(naive_dt)
             except ValueError:
                 raise HTTPException(status_code=422, detail="时间格式错误，请使用 'YYYY-MM-DD HH:MM' 格式。")
 
-            new_args = [
-                payload.get("receiver_email"),
-                payload.get("template_type"),
-                payload.get("template_data", {}),
-                payload.get("custom_subject")
-            ]
+            # 构建新的 kwargs 字典
+            new_kwargs = {
+                "job_id": job_id, # 保持 job_id
+                "receiver_email": payload.get("receiver_email"),
+                "template_type": payload.get("template_type"),
+                "template_data": payload.get("template_data", {}),
+                "custom_subject": payload.get("custom_subject"),
+                "temp_file_paths": job.kwargs.get("temp_file_paths", []) # 保留旧的附件
+            }
             
-            # 先修改参数，再重新调度时间
-            scheduler_service.scheduler.modify_job(job_id, args=new_args)
+            scheduler_service.scheduler.modify_job(job_id, kwargs=new_kwargs) # <-- 使用 kwargs
             scheduler_service.scheduler.reschedule_job(job_id, trigger='date', run_date=aware_dt)
             
+            logger.info(f"API: Job [ID: {job_id}] was successfully updated. New run time: {aware_dt}")
             return {"status": "success", "message": f"任务 {job_id} 已成功更新。"}
 
         # --- 更新周期性任务 ---
         elif trigger_type == "cron":
-            new_args = [
-                payload.get("receiver_emails", []),
-                payload.get("template_type"),
-                payload.get("template_data", {}),
-                payload.get("custom_subject")
-            ]
+            new_kwargs = {
+                "job_id": job_id,
+                "job_name": payload.get("job_name"),
+                "receiver_emails": payload.get("receiver_emails", []),
+                "template_type": payload.get("template_type"),
+                "template_data": payload.get("template_data", {}),
+                "custom_subject": payload.get("custom_subject")
+            }
             new_name = payload.get("job_name")
 
-            scheduler_service.scheduler.modify_job(job_id, name=new_name, args=new_args)
+            scheduler_service.scheduler.modify_job(job_id, name=new_name, kwargs=new_kwargs) # <-- 使用 kwargs
 
             new_cron = payload.get("cron_string")
             if new_cron:
@@ -141,7 +145,8 @@ async def update_scheduled_job(job_id: str, payload: Dict[str, Any] = Body(...))
                     trigger='cron', 
                     minute=parts[0], hour=parts[1], day=parts[2], month=parts[3], day_of_week=parts[4]
                 )
-
+            
+            logger.info(f"API: Cron job [ID: {job_id}] was successfully updated. New name: '{new_name}', New cron: '{new_cron}'.")
             return {"status": "success", "message": f"周期任务 {job_id} 已成功更新。"}
 
         else:
@@ -150,7 +155,7 @@ async def update_scheduled_job(job_id: str, payload: Dict[str, Any] = Body(...))
     except JobLookupError:
         raise HTTPException(status_code=404, detail=f"未找到ID为 {job_id} 的任务。")
     except Exception as e:
-        print(f"更新任务 {job_id} 时发生错误: {e}")
+        logger.error(f"API: Error updating job '{job_id}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"更新任务时发生错误: {str(e)}")
 
 
@@ -161,11 +166,11 @@ def cancel_scheduled_job(job_id: str):
     """
     try:
         scheduler_service.scheduler.remove_job(job_id)
-        print(f"任务 {job_id} 已被用户请求取消。")
+        logger.info(f"API: Job [ID: {job_id}] was successfully cancelled by user request.")
         return {"status": "success", "message": f"任务 {job_id} 已成功取消。"}
     except JobLookupError:
-        print(f"尝试取消一个不存在的任务: {job_id}")
+        logger.warning(f"API: Attempted to cancel a non-existent job with ID: {job_id}")
         raise HTTPException(status_code=404, detail=f"未找到ID为 {job_id} 的任务。")
     except Exception as e:
-        print(f"取消任务 {job_id} 时发生错误: {e}")
+        logger.error(f"API: Error cancelling job '{job_id}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"取消任务时发生错误: {str(e)}")
