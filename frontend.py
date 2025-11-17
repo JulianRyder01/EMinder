@@ -118,13 +118,16 @@ def find_selections_from_emails(emails: list[str]) -> list[str]:
     return [find_selection_from_email(email) for email in emails]
 
 def get_jobs_list():
-    """从后端获取所有计划任务列表并格式化"""
+    """从后端获取所有计划任务列表并格式化，健壮地处理空列表情况。"""
+    # 步骤 1: 预定义 DataFrame 的列，确保结构一致性。
+    columns = ["任务ID", "任务名称", "类型", "下次运行时间", "发送目标"]
+    
     try:
         response = requests.get(JOBS_URL)
         response.raise_for_status()
         jobs = response.json().get("jobs", [])
         if not jobs:
-            return pd.DataFrame(columns=["任务ID", "任务名称", "类型", "下次运行时间", "发送目标"]), "✅ 暂无计划中的任务。"
+            return pd.DataFrame([], columns=columns), "✅ 暂无计划中的任务。快去创建一个吧 😊"
         
         formatted_data = []
         for job in jobs:
@@ -140,25 +143,14 @@ def get_jobs_list():
             run_time = "N/A"
             # ========================== END: 错误修复区域 ============================
             if job['next_run_time']:
-                    # 尝试解析带时区或不带时区的时间字符串
-                    try:
-                        dt_object = datetime.datetime.fromisoformat(job['next_run_time'])
-                        run_time = dt_object.strftime('%Y-%m-%d %H:%M:%S %Z')
-                    except ValueError:
-                        run_time = job['next_run_time']
-
-            if job_type == 'date':
-                receiver = job_kwargs.get('receiver_email', '未知')
-            elif job_type == 'cron':
-                # 内置的每日总结任务可能没有 receiver_emails，特殊处理
-                if job.get('name') == '每日总结 (周期性)':
-                    receiver = "所有已订阅用户"
-                else:
-                    receivers_list = job_kwargs.get('receiver_emails', [])
-                    receiver = f"{len(receivers_list)} 个用户" if receivers_list else "无"
-            else:
-                # 对旧的或未知的任务类型做一个兼容显示
-                receiver = job.get('name') 
+                try:
+                    dt_object = datetime.datetime.fromisoformat(job['next_run_time'])
+                    run_time = dt_object.strftime('%Y-%m-%d %H:%M:%S %Z')
+                except ValueError:
+                    run_time = job['next_run_time']
+            
+            if job_type == 'cron' and job.get('name') == '每日总结 (周期性)':
+                receiver = "所有已订阅用户"
 
             formatted_data.append({
                 "任务ID": job['id'],
@@ -168,12 +160,13 @@ def get_jobs_list():
                 "发送目标": receiver,
             })
         
-        df = pd.DataFrame(formatted_data)
+        df = pd.DataFrame(formatted_data, columns=columns)
         return df, f"✅ 任务列表已于 {datetime.datetime.now().strftime('%H:%M:%S')} 刷新。"
     except requests.RequestException as e:
         msg = f"🔴 获取任务列表失败: {e}"
         gr.Warning(msg)
-        return pd.DataFrame(), msg
+        # 步骤 5: 在异常情况下，同样返回一个带有正确列的空 DataFrame。
+        return pd.DataFrame([], columns=columns), msg
 
 def cancel_job_by_id(job_id_to_cancel: str):
     """根据ID调用后端API取消任务"""

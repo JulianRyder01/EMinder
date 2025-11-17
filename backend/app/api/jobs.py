@@ -46,6 +46,8 @@ def get_job_details(job_id: str):
     try:
         job = scheduler_service.scheduler.get_job(job_id)
         if not job:
+            # 这里的 raise JobLookupError 是正确的，但不需要传递参数
+            # 因为 APScheduler 的 get_job 在找不到时返回 None，我们手动触发异常流程
             raise JobLookupError
         
         job_details = {
@@ -75,7 +77,11 @@ def get_job_details(job_id: str):
         return {"status": "success", "job": job_details}
 
     except JobLookupError:
+        # ========================== START: MODIFICATION (Backend Error Fix) ==========================
+        # DESIGNER'S NOTE:
+        # 相应地，我们现在可以捕获正确的 JobLookupError 并返回一个标准的 404 错误。
         raise HTTPException(status_code=404, detail=f"未找到ID为 {job_id} 的任务。")
+        # ========================== END: MODIFICATION (Backend Error Fix) ============================
     except Exception as e:
         logger.error(f"Error getting details for job '{job_id}': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"获取任务详情时发生错误: {str(e)}")
@@ -148,7 +154,6 @@ async def update_scheduled_job(job_id: str, payload: Dict[str, Any] = Body(...))
             
             logger.info(f"API: Cron job [ID: {job_id}] was successfully updated. New name: '{new_name}', New cron: '{new_cron}'.")
             return {"status": "success", "message": f"周期任务 {job_id} 已成功更新。"}
-
         else:
             raise HTTPException(status_code=422, detail="请求中缺少有效的 'trigger_type'。")
 
