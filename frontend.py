@@ -218,6 +218,25 @@ def get_display_name_from_template_key(key):
     """【新增】根据内部key查找模板的显示名称"""
     return TEMPLATES_METADATA.get(key, {}).get("display_name")
 
+# ========================== START: MODIFICATION (Requirement ③) ==========================
+# DESIGNER'S NOTE:
+# 新增一个辅助函数，用于根据后端返回的消息决定是否跳转到任务管理标签页。
+# 这是一个独立的、可复用的逻辑。
+def navigate_on_success(message: str):
+    """
+    检查操作结果消息。如果消息表明任务已成功调度，
+    则返回一个Gradio更新对象以切换到任务管理选项卡。
+    否则，返回一个不执行任何操作的更新对象。
+    """
+    # 关键词检查，覆盖了“一次性任务”和“周期性任务”的成功提示。
+    if message and "成功调度" in message:
+        # 使用 'id' 来引用Tab，这是Gradio中最稳健的方式。
+        return gr.update(selected="jobs_tab")
+    # 如果操作失败或不是调度操作，则不进行任何界面跳转。
+    return gr.update()
+# ========================== END: MODIFICATION (Requirement ③) ============================
+
+
 # ========================== START: 修改区域 (需求 ①) ==========================
 # DESIGNER'S NOTE:
 # `send_or_schedule_email` 函数被重构以支持文件上传。
@@ -243,6 +262,9 @@ def send_or_schedule_email(
     """处理立即发送或单次调度的邮件，支持附件上传。"""
     receiver_email = get_email_from_selection(receiver_selection)
     if not receiver_email or not template_choice:
+        gr.Warning("错误：接收者邮箱和模板类型为必填项。")
+        # ========================== START: MODIFICATION (Requirement ③) ==========================
+        # DESIGNER'S NOTE: 确保在校验失败时也返回一个字符串，以防止前端出错。
         return "错误：接收者邮箱和模板类型为必填项。"
     
     template_key = get_template_key_from_display_name(template_choice)
@@ -317,15 +339,25 @@ def send_or_schedule_email(
         return "错误：未知的操作。"
 
     try:
-        response = requests.post(url, data=form_data, files=files)
+        response = requests.post(url, data=form_data, files=files_to_send)
         response.raise_for_status()
+        # ========================== START: MODIFICATION (Requirement ③) ==========================
+        # DESIGNER'S NOTE: 在成功调度后，返回一个带有明确成功标识的Info消息。
+        # navigate_on_success 函数将依赖此消息来决定是否跳转。
+        message = response.json().get("message", "操作成功！")
         if action == "schedule_once":
-            gr.Info("任务已成功调度！将自动刷新任务列表。")
-        return response.json().get("message", "操作成功！")
+            gr.Info("任务已成功调度！将自动跳转并刷新任务列表。")
+        return message
+        # ========================== END: MODIFICATION (Requirement ③) ============================
+
     except requests.RequestException as e:
         error_detail = "未知错误"
         try: error_detail = e.response.json().get('detail', e.response.text)
         except: pass
+        # ========================== START: MODIFICATION (Requirement ③) ==========================
+        # DESIGNER'S NOTE: 在API调用失败时，返回清晰的错误信息。
+        # navigate_on_success 会因为消息中不含“成功”关键词而阻止跳转。
+        gr.Error(f"操作失败: {error_detail}")
         return f"操作失败: {error_detail}"
     finally:
         # 确保所有打开的文件句柄都被关闭
@@ -390,8 +422,11 @@ def handle_schedule_cron(
     try:
         response = requests.post(SCHEDULE_CRON_URL, json=payload)
         response.raise_for_status()
-        gr.Info("周期任务已成功调度！将自动刷新任务列表。")
-        return response.json().get("message", "操作成功！")
+        # ========================== START: MODIFICATION (Requirement ③) ==========================
+        message = response.json().get("message", "操作成功！")
+        gr.Info("周期任务已成功调度！将自动跳转并刷新任务列表。")
+        return message
+        # ========================== END: MODIFICATION (Requirement ③) ============================
     except requests.exceptions.HTTPError as e:
         error_detail = "未知错误"
         try:
@@ -612,7 +647,7 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
             outputs=output_text
         )
         # 【修改】将 custom_subject_input 和 attachment_component 添加到返回值
-        return load_status, template_dropdown, custom_subject_input, attachment_state, action_button, all_field_outputs, toggle_template_fields
+        return load_status, template_dropdown, custom_subject_input, attachment_state, action_button, output_text, all_field_outputs, toggle_template_fields
 
     with gr.Tabs() as tabs:
         # --- Tab 1: 订阅管理 ---
@@ -635,11 +670,11 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
 
         with gr.TabItem("手动发送邮件") as tab_manual:
             # 【修改】接收新增的 custom_subject_input 和 attachment_component
-            manual_load_status, manual_template_dropdown, manual_custom_subject, manual_attachment, manual_action_button, manual_all_field_outputs, manual_toggle_fn = create_email_form(is_scheduled=False, receiver_dropdown=shared_receiver_input)
+            manual_load_status, manual_template_dropdown, manual_custom_subject, manual_attachment, manual_action_button, manual_output, manual_all_field_outputs, manual_toggle_fn = create_email_form(is_scheduled=False, receiver_dropdown=shared_receiver_input)
         
         with gr.TabItem("定时单次任务") as tab_schedule:
             # 【修改】接收新增的 custom_subject_input 和 attachment_component
-            schedule_load_status, schedule_template_dropdown, schedule_custom_subject, schedule_attachment, schedule_action_button, schedule_all_field_outputs, schedule_toggle_fn = create_email_form(is_scheduled=True, receiver_dropdown=shared_receiver_input)
+            schedule_load_status, schedule_template_dropdown, schedule_custom_subject, schedule_attachment, schedule_action_button, schedule_output, schedule_all_field_outputs, schedule_toggle_fn = create_email_form(is_scheduled=True, receiver_dropdown=shared_receiver_input)
         
         # --- 【新增】Tab 3: 计划周期任务 ---
         with gr.TabItem("计划周期任务", id="cron_tab") as tab_cron:
@@ -811,7 +846,20 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
     # 计划任务 Tab
     tab_jobs.select(fn=get_jobs_list, outputs=[jobs_dataframe, jobs_status_output])
     refresh_jobs_button.click(fn=get_jobs_list, outputs=[jobs_dataframe, jobs_status_output])
-    cancel_button.click(fn=cancel_job_by_id, inputs=[job_id_input], outputs=[cancel_status_output]).then(fn=get_jobs_list, outputs=[jobs_dataframe, jobs_status_output])
+
+# ========================== START: MODIFICATION (Requirement ②) ==========================
+# DESIGNER'S NOTE: 为取消按钮的 click 事件添加了 js 参数，以弹出浏览器原生确认框。
+# 只有当用户点击“确定”时，后续的 Python 函数才会执行。
+    cancel_button.click(
+        fn=cancel_job_by_id, 
+        inputs=[job_id_input], 
+        outputs=[cancel_status_output],
+        js='_ => confirm("您确定要取消这个计划任务吗？此操作无法撤销。")'
+    ).then(
+        fn=get_jobs_list, 
+        outputs=[jobs_dataframe, jobs_status_output]
+    )
+# ========================== END: MODIFICATION (Requirement ②) ============================
     
     # 【核心新增逻辑】点击任务列表，填充并显示编辑区域
     def on_select_job(df_input: any, evt: gr.SelectData):
@@ -971,14 +1019,33 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
         lambda: gr.update(visible=False), outputs=edit_job_column
     )
     
-    # 任务创建成功后跳转到任务管理并刷新
-    schedule_action_button.click(lambda: gr.update(selected=tab_jobs.id), outputs=tabs).then(fn=get_jobs_list, outputs=[jobs_dataframe, jobs_status_output])
+# ========================== START: MODIFICATION (Requirement ③) ==========================
+# DESIGNER'S NOTE:
+# 移除了原有的无条件跳转逻辑，并替换为调用新的 `navigate_on_success` 函数。
+# 只有当 API 调用返回成功消息时，才会执行跳转。
+    # 任务创建成功后，根据结果决定是否跳转到任务管理并刷新
+    schedule_action_button.click(
+        fn=navigate_on_success, 
+        inputs=schedule_output, 
+        outputs=tabs
+    ).then(
+        fn=get_jobs_list, 
+        outputs=[jobs_dataframe, jobs_status_output]
+    )
+
     create_cron_button.click(
         fn=handle_schedule_cron,
-        # 【修改】在 inputs 列表中添加 cron_custom_subject
         inputs=[cron_job_name, cron_expression, cron_receiver_subscribers, cron_receiver_custom, cron_template_dropdown, cron_custom_subject] + cron_all_field_inputs,
         outputs=cron_output_text
-    ).then(lambda: gr.update(selected=tab_jobs.id), outputs=tabs).then(fn=get_jobs_list, outputs=[jobs_dataframe, jobs_status_output])
+    ).then(
+        fn=navigate_on_success,
+        inputs=cron_output_text,
+        outputs=tabs
+    ).then(
+        fn=get_jobs_list, 
+        outputs=[jobs_dataframe, jobs_status_output]
+    )
+# ========================== END: MODIFICATION (Requirement ③) ============================
     
     # Demo加载时的初始化操作
     def initial_load():

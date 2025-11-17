@@ -201,6 +201,22 @@ script_runner_meta = {
     "description": "在后台运行命令，捕获其输出，并将脚本生成的所有指定文件作为附件发送。",
     "fields": [
         {
+            "name": "email_body_message",
+            "label": "邮件说明与附言 (可选)",
+            "type": "textarea",
+            "default": "您好，这是脚本的运行报告，请查收附件中的文件（如有）。"
+        },
+# ========================== START: MODIFICATION (Requirement ①) ==========================
+# DESIGNER'S NOTE: 新增邮件标题模板字段，允许用户自定义并使用特殊标记。
+        {
+            "name": "custom_subject",
+            "label": "邮件标题模板",
+            "type": "text",
+            "default": "脚本 <ifsuccess> 报告 - <time>",
+            "info": "使用 <time> 插入时间戳, <ifsuccess> 插入成功/失败状态"
+        },
+# ========================== END: MODIFICATION (Requirement ①) ============================
+        {
             "name": "script_command",
             "label": "脚本启动命令",
             "type": "textarea",
@@ -230,7 +246,7 @@ script_runner_meta = {
             "name": "log_summary_prompt",
             "label": "日志总结提示词 (可选, 留空不总结)",
             "type": "textarea",
-            "default": "请帮我总结以下脚本的运行日志，关注其中的关键错误信息和最终结果。"
+            "default": ""
         }
     ]
 }
@@ -241,6 +257,7 @@ async def get_script_runner_template(data: dict) -> dict:
     执行脚本，处理日志，并生成附带附件的邮件内容。
     这是一个异步函数，因为它需要等待脚本执行和可能的 LLM API 调用。
     """
+    message = data.get("email_body_message", '').strip()
     command = data.get('script_command', '').strip()
     work_dir = data.get('working_directory', '.').strip()
     attach_path = data.get('attach_file_path', '').strip()
@@ -248,6 +265,11 @@ async def get_script_runner_template(data: dict) -> dict:
     # ========================== START: MODIFICATION (Unified Attachment System) ==========================
     generated_paths_str = data.get('generated_attachment_paths', '').strip()
     # ========================== END: MODIFICATION (Unified Attachment System) ============================
+
+# ========================== START: MODIFICATION (Requirement ①) ==========================
+# DESIGNER'S NOTE: 从 data 字典中获取用户定义的标题模板。
+    custom_subject_template = data.get('custom_subject', '脚本执行报告').strip()
+# ========================== END: MODIFICATION (Requirement ①) ============================
 
     if not command:
         return {
@@ -259,7 +281,17 @@ async def get_script_runner_template(data: dict) -> dict:
     # 脚本执行器现在内部处理绝对路径，这里无需转换
     exec_result = await script_runner_service.run_script(command, work_dir)
 
-    subject = f"脚本执行报告: {command.split()[0]} {'成功' if exec_result['success'] else '失败'}"
+# ========================== START: MODIFICATION (Requirement ①) ==========================
+# DESIGNER'S NOTE:
+# 这是实现标题模板功能的核心逻辑。我们准备好替换的文本，然后对用户提供的模板字符串执行替换。
+    # 准备替换用的文本
+    timestamp = exec_result.get('start_time', 'N/A')
+    success_str = "成功" if exec_result['success'] else "失败"
+
+    # 执行替换，生成最终的邮件标题
+    subject = custom_subject_template.replace("<time>", timestamp)
+    subject = subject.replace("<ifsuccess>", success_str)
+# ========================== END: MODIFICATION (Requirement ①) ============================
     
     # --- 构建 HTML 报告 ---
     status_color = "#4CAF50" if exec_result['success'] else "#F44336"
@@ -271,9 +303,15 @@ async def get_script_runner_template(data: dict) -> dict:
 
     stdout_html = escape_html(exec_result.get('stdout', ''))
     stderr_html = escape_html(exec_result.get('stderr', ''))
+    # ========================== START: MODIFICATION (Requirements ①, ③) ==========================
+    # DESIGNER'S NOTE:
+    # 核心逻辑变更：处理由脚本生成的所有附件。
+    # 我们不再区分图片或文件，所有路径都被统一处理并添加到 `attachments` 列表中。
+    # HTML 正文现在只显示一个确认列表，而不是尝试嵌入图片。
+    html_parts = []
+    html_parts.append(f"<h4>{message}</h4>")
 
-    html_parts = [
-        f"""
+    html_parts.append(f"""
         <h4>执行详情 📊</h4>
         <ul>
             <li><strong>命令:</strong> <code>{command}</code></li>
@@ -282,9 +320,29 @@ async def get_script_runner_template(data: dict) -> dict:
             <li><strong>开始时间:</strong> {exec_result.get('start_time', 'N/A')}</li>
             <li><strong>结束时间:</strong> {exec_result.get('end_time', 'N/A')}</li>
             <li><strong>总耗时:</strong> {exec_result.get('duration_seconds', 'N/A')} 秒</li>
-        </ul>
-        """
-    ]
+        </ul>""")
+
+    script_generated_attachments = []
+    
+    if generated_paths_str:
+        paths = [p.strip() for p in generated_paths_str.split('\n') if p.strip()]
+        
+        if paths:
+            attachment_html_list = "<ul>"
+            for path in paths:
+                # 注意：这里我们只检查路径是否为绝对路径，实际存在性由 email_service 在发送时最终确认。
+                # 这样即使脚本失败，我们仍然会尝试附加文件，这可能有助于调试。
+                if os.path.isabs(path):
+                    script_generated_attachments.append(path)
+                    attachment_html_list += f"<li>✓ {os.path.basename(path)}</li>"
+                else:
+                    attachment_html_list += f"<li style='color: red;'>✗ {os.path.basename(path)} (路径非绝对路径，已跳过)</li>"
+            attachment_html_list += "</ul>"
+            
+            html_parts.append(f"<h4>由脚本生成的附件 📎</h4>{attachment_html_list}")
+    # ========================== END: MODIFICATION (Unified Attachment System) ============================
+
+    
 
     # --- (可选) LLM 总结 ---
     log_for_summary = exec_result.get('stdout') or exec_result.get('stderr')
@@ -312,40 +370,7 @@ async def get_script_runner_template(data: dict) -> dict:
         <pre style="white-space: pre-wrap; word-wrap: break-word; background-color: #fbe9e7; color: #b71c1c; padding: 15px; border-radius: 8px;">{stderr_html}</pre>
         """)
 
-    # --- 处理附件、图片 ---
-    attachments_list = []
-    # ========================== START: MODIFICATION (Requirements ①, ③) ==========================
-    # DESIGNER'S NOTE:
-    # 核心逻辑变更：处理由脚本生成的所有附件。
-    # 我们不再区分图片或文件，所有路径都被统一处理并添加到 `attachments` 列表中。
-    # HTML 正文现在只显示一个确认列表，而不是尝试嵌入图片。
-    
-    script_generated_attachments = []
-    
-    if generated_paths_str:
-        paths = [p.strip() for p in generated_paths_str.split('\n') if p.strip()]
-        
-        if paths:
-            attachment_html_list = "<ul>"
-            for path in paths:
-                # 注意：这里我们只检查路径是否为绝对路径，实际存在性由 email_service 在发送时最终确认。
-                # 这样即使脚本失败，我们仍然会尝试附加文件，这可能有助于调试。
-                if os.path.isabs(path):
-                    script_generated_attachments.append(path)
-                    attachment_html_list += f"<li>✓ {os.path.basename(path)}</li>"
-                else:
-                    attachment_html_list += f"<li style='color: red;'>✗ {os.path.basename(path)} (路径非绝对路径，已跳过)</li>"
-            attachment_html_list += "</ul>"
-            
-            html_parts.append(f"<h4>由脚本生成的附件 📎</h4>{attachment_html_list}")
-    # ========================== END: MODIFICATION (Unified Attachment System) ============================
 
-    # --- 添加原始日志输出 ---
-    if stdout_html:
-        html_parts.append(f'<h4>标准输出 (stdout) 📋</h4><pre style="white-space: pre-wrap; word-wrap: break-word; background-color: #f5f5f5; padding: 15px; border-radius: 8px;">{stdout_html}</pre>')
-    if stderr_html:
-        html_parts.append(f'<h4>标准错误 (stderr) ❗</h4><pre style="white-space: pre-wrap; word-wrap: break-word; background-color: #fbe9e7; color: #b71c1c; padding: 15px; border-radius: 8px;">{stderr_html}</pre>')
-        
     # --- 返回符合新规范的完整字典 ---
     return {
         "subject": subject,
