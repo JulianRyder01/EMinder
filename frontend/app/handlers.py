@@ -182,7 +182,9 @@ def cancel_job_by_id(job_id_to_cancel: str):
         gr.Warning(f"操作失败: {error_detail}")
         return f"操作失败: {error_detail}"
 
-def send_or_schedule_email(action, receiver_selection, template_choice, custom_subject, send_at, attachment_files_list, *dynamic_field_values):
+# ========================== START: MODIFICATION (需求 ①) ==========================
+def send_or_schedule_email(action, receiver_selection, template_choice, custom_subject, send_at, silent_run, attachment_files_list, *dynamic_field_values):
+# ========================== END: MODIFICATION (需求 ①) ============================
     """Callback to handle both 'send now' and 'schedule once' actions."""
     receiver_email = get_email_from_selection(receiver_selection)
     if not receiver_email or not template_choice:
@@ -197,7 +199,10 @@ def send_or_schedule_email(action, receiver_selection, template_choice, custom_s
 
     form_data = {
         "receiver_email": receiver_email, "template_type": template_key,
-        "template_data_str": json.dumps(template_data), "custom_subject": custom_subject or ""
+        "template_data_str": json.dumps(template_data), "custom_subject": custom_subject or "",
+# ========================== START: MODIFICATION (需求 ①) ==========================
+        "silent_run": silent_run
+# ========================== END: MODIFICATION (需求 ①) ============================
     }
     
     url = ""
@@ -226,7 +231,7 @@ def send_or_schedule_email(action, receiver_selection, template_choice, custom_s
         gr.Error(f"操作失败: {error_detail}")
         return f"操作失败: {error_detail}"
 
-def handle_schedule_cron(job_name, cron_string, subscriber_list, custom_emails_str, template_choice, custom_subject, *dynamic_field_values):
+def handle_schedule_cron(job_name, cron_string, subscriber_list, custom_emails_str, template_choice, custom_subject, silent_run, *dynamic_field_values):
     """Callback to schedule a recurring cron job."""
     if not all([job_name, cron_string, template_choice]):
         gr.Warning("任务名称, Cron表达式 和 邮件模板为必填项。")
@@ -247,7 +252,8 @@ def handle_schedule_cron(job_name, cron_string, subscriber_list, custom_emails_s
     
     payload = {
         "job_name": job_name, "cron_string": cron_string, "receiver_emails": all_receiver_emails,
-        "template_type": template_key, "template_data": template_data, "custom_subject": custom_subject
+        "template_type": template_key, "template_data": template_data, "custom_subject": custom_subject,
+        "silent_run": silent_run
     }
 
     try:
@@ -260,7 +266,7 @@ def handle_schedule_cron(job_name, cron_string, subscriber_list, custom_emails_s
         gr.Error(f"操作失败: {error_detail}")
         return f"操作失败: {error_detail}"
 
-def handle_update_job(job_id, job_type, cron_name, cron_string, cron_subscribers, cron_custom, date_receiver, date_send_at, template_choice, custom_subject, *dynamic_field_values):
+def handle_update_job(job_id, job_type, cron_name, cron_string, cron_subscribers, cron_custom, date_receiver, date_send_at, template_choice, custom_subject, silent_run, *dynamic_field_values):
     """Callback to update an existing scheduled job."""
     if not job_id: return "错误：没有指定要更新的任务ID。"
     template_key = get_template_key_from_display_name(template_choice)
@@ -269,7 +275,7 @@ def handle_update_job(job_id, job_type, cron_name, cron_string, cron_subscribers
     fields = state.TEMPLATES_METADATA.get(template_key, {}).get("fields", [])
     template_data = {field["name"]: dynamic_field_values[i*2+1] if field.get("type") == "number" else dynamic_field_values[i*2] for i, field in enumerate(fields)}
     
-    payload = { "template_type": template_key, "template_data": template_data, "custom_subject": custom_subject }
+    payload = { "template_type": template_key, "template_data": template_data, "custom_subject": custom_subject, "silent_run": silent_run }
 
     if job_type == 'cron':
         emails = get_emails_from_selection_list(cron_subscribers)
@@ -376,7 +382,7 @@ def toggle_template_fields(max_fields, choice):
 
 def on_select_job(df_input: pd.DataFrame, evt: gr.SelectData):
     """Callback for when a row is selected in the jobs dataframe, fetching details to populate the edit form."""
-    TOTAL_EDIT_OUTPUTS = 13 + 2 + (10 * 3) # Fixed + Dynamic Area + (Max Fields * 3)
+    TOTAL_EDIT_OUTPUTS = 13 + 2 + (10 * 3) + 1 # Fixed + Dynamic Area + (Max Fields * 3)
     
     if df_input.empty or evt.index is None:
         return [gr.update()] * TOTAL_EDIT_OUTPUTS
@@ -396,6 +402,7 @@ def on_select_job(df_input: pd.DataFrame, evt: gr.SelectData):
         # 1. Fixed component updates
         template_key = job.get("template_type")
         template_data = job.get("template_data", {})
+        silent_run_status = job.get("silent_run", False)
         
         updates = {
             "edit_job_column": gr.update(visible=True),
@@ -404,7 +411,8 @@ def on_select_job(df_input: pd.DataFrame, evt: gr.SelectData):
             "edit_custom_subject": job.get("custom_subject"),
             "edit_cron_group": gr.update(visible=False), "edit_date_group": gr.update(visible=False),
             "edit_cron_name": "", "edit_cron_string": "", "edit_cron_subscribers": gr.update(value=[]),
-            "edit_date_receiver": gr.update(value=None), "edit_date_send_at": ""
+            "edit_date_receiver": gr.update(value=None), "edit_date_send_at": "",
+            "edit_silent_run_checkbox": gr.update(value=silent_run_status)
         }
 
         if job["trigger_type"] == 'cron':

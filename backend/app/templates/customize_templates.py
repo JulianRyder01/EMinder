@@ -54,6 +54,9 @@ import os
 import datetime
 import re
 import glob
+# ========================== START: MODIFICATION (需求 ②) ==========================
+import shutil  # 导入 shutil 用于高级文件操作（移动）
+# ========================== END: MODIFICATION (需求 ②) ============================
 from ..core.config import settings # 导入全局配置
 
 # 设计师注：为了实现 Markdown 到 HTML 的转换，我们推荐使用 'Markdown' 库。
@@ -159,7 +162,7 @@ def _read_and_process_report_file(report_folder: str, report_filename: str) -> d
 def _create_default_daily_template(filepath: str, plan_items_from_yesterday: list = None):
     """
     在一个指定的路径创建一个默认的每日总结Markdown模板文件。
-    新增功能：可以接收昨天的计划并自动填充到今天的待办中。
+    新增功能：可以接收昨天的计划并自动填充到今天的待办中，并加入了“随手记”板块。
     """
     # ========================== START: MODIFICATION (模板简化) ==========================
     template_header = f"# {datetime.date.today().strftime('%Y-%m-%d')} 每日总结与明日计划\n\n"
@@ -168,15 +171,22 @@ def _create_default_daily_template(filepath: str, plan_items_from_yesterday: lis
     today_items_section = "## 📝 今日事项\n\n"
     if plan_items_from_yesterday:
         for item in plan_items_from_yesterday:
+            # 确保迁移过来的事项是未完成状态
             today_items_section += f"- [ ] {item}\n"
     else:
+        # 如果没有昨日计划，提供一个空项供用户填写
         today_items_section += "- [ ] \n"
     
+    # --- 新增 "随手记" 板块 ---
+    notes_section = "\n## ✍️ 随手记\n\n- \n"
+
     template_plan = "\n## 🚀 明日计划\n\n- \n"
     
-    final_content = template_header + today_items_section + template_plan
-    # ========================== END: MODIFICATION (模板简化) ============================
+    final_content = template_header + today_items_section + notes_section + template_plan
+    
     try:
+        # 确保目录存在
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(final_content)
         print(f"成功创建了新的每日模板: {filepath}")
@@ -185,35 +195,34 @@ def _create_default_daily_template(filepath: str, plan_items_from_yesterday: lis
 
 def _parse_daily_summary(content: str) -> dict:
     """
-    (已重构) 解析每日总结Markdown文件的内容，以适应新的简化模板。
+    解析每日总结Markdown文件的内容。
     :param content: Markdown文件的字符串内容。
-    :return: 包含已办、待办、完成度和明日计划的字典。
+    :return: 包含已办、待办、完成度、明日计划和随手记的字典。
     """
-    # ========================== START: MODIFICATION (解析逻辑更新) ==========================
-    # 在 "今日事项" 和 "明日计划" 两个标题之间找到内容块
-    today_items_content_match = re.search(r'##\s*📝\s*今日事项\s*([\s\S]*?)(?=##\s*🚀\s*明日计划)', content, re.IGNORECASE)
-    today_items_content = today_items_content_match.group(1) if today_items_content_match else ""
+    # 使用正则表达式安全地提取各个部分的内容
+    today_items_content_match = re.search(r'##\s*📝\s*今日事项\s*([\s\S]*?)(?=\n##|$)', content, re.IGNORECASE)
+    notes_content_match = re.search(r'##\s*✍️\s*随手记\s*([\s\S]*?)(?=\n##|$)', content, re.IGNORECASE)
+    plan_content_match = re.search(r'##\s*🚀\s*明日计划\s*([\s\S]*?)(?=\n##|$)', content, re.IGNORECASE)
 
-    # 使用正则表达式查找Markdown复选框
-    done_items = re.findall(r'-\s*\[x\]\s*(.+)', today_items_content, re.IGNORECASE)
-    todo_items = re.findall(r'-\s*\[ \]\s*(.+)', today_items_content)
-    # ========================== END: MODIFICATION (解析逻辑更新) ============================
-    
-    # 提取明日计划 (找到 "明日计划" 标题后的所有内容)
-    plan_match = re.search(r'##\s*🚀\s*明日计划.*\n([\s\S]*)', content, re.IGNORECASE)
-    plan_items = []
-    if plan_match:
-        # 提取内容并按行分割，过滤空行
-        plan_text = plan_match.group(1).strip()
-        plan_items = [line.strip('- ').strip() for line in plan_text.split('\n') if line.strip() and not line.strip().startswith('-')]
+    today_items_content = today_items_content_match.group(1).strip() if today_items_content_match else ""
+    notes_content = notes_content_match.group(1).strip() if notes_content_match else ""
+    plan_content = plan_content_match.group(1).strip() if plan_content_match else ""
 
+    # 提取 "今日事项" 中的已完成和未完成项
+    done_items = [item.strip() for item in re.findall(r'-\s*\[x\]\s*(.+)', today_items_content, re.IGNORECASE)]
+    todo_items = [item.strip() for item in re.findall(r'-\s*\[ \]\s*(.+)', today_items_content)]
+
+    # 提取 "随手记" 和 "明日计划" 的列表项
+    notes_items = [line.strip('- ').strip() for line in notes_content.split('\n') if line.strip() and line.strip().startswith('- ')]
+    plan_items = [line.strip('- ').strip() for line in plan_content.split('\n') if line.strip() and line.strip().startswith('- ')]
 
     total_tasks = len(done_items) + len(todo_items)
     progress = (len(done_items) / total_tasks * 100) if total_tasks > 0 else 0
 
     return {
-        "done": [item.strip() for item in done_items],
-        "todo": [item.strip() for item in todo_items],
+        "done": done_items,
+        "todo": todo_items,
+        "notes": notes_items,
         "plan": plan_items,
         "total": total_tasks,
         "progress": round(progress)
@@ -244,10 +253,12 @@ async def _generate_period_summary(period_days: int, period_name: str) -> dict:
     today = datetime.date.today()
     start_date = today - datetime.timedelta(days=period_days)
     relevant_files = []
-    for filepath in glob.glob(os.path.join(history_path, "*_summary.md")):
+    # 修改glob以匹配新的归档文件名 (YYYY-MM-DD.md)
+    for filepath in glob.glob(os.path.join(history_path, "*.md")):
         filename = os.path.basename(filepath)
         try:
-            file_date_str = filename.split('_')[0]
+            # 文件名现在就是日期
+            file_date_str = os.path.splitext(filename)[0]
             file_date = datetime.datetime.strptime(file_date_str, "%Y-%m-%d").date()
             if start_date <= file_date < today: # Exclude today
                 relevant_files.append((file_date, filepath))
@@ -323,6 +334,8 @@ async def _generate_period_summary(period_days: int, period_name: str) -> dict:
     """
     
     return {"subject": subject, "html": html_content}
+# ========================== END: MODIFICATION (需求 ②) ============================
+
 
 # --- 步骤 1: 【新模板】每日总结与明日计划 ---
 daily_summary_plan_meta = {
@@ -331,9 +344,12 @@ daily_summary_plan_meta = {
     "fields": [] # 这是一个全自动模板，不需要用户在UI上填写任何字段。
 }
 
+# ========================== START: MODIFICATION (需求 ②) ==========================
 async def generate_daily_summary_plan_template(data: dict) -> dict:
     """
-    实现每日总结与明日计划的核心逻辑。
+    (已重构) 实现每日总结与明日计划的核心逻辑。
+    - 首次运行: 初始化今日文件，并迁移昨日计划。
+    - 后续运行: 总结今日进度，并备份，但不删除源文件。
     """
     # 1. 检查路径配置
     if not settings.DAILY_SUMMARY_PATH:
@@ -349,63 +365,73 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
     # 2. 准备路径并查找昨天的计划 (核心新增逻辑)
     today = datetime.date.today()
     yesterday = today - datetime.timedelta(days=1)
+    
     today_filename = f"{today.strftime('%Y-%m-%d')}.md"
     yesterday_filename = f"{yesterday.strftime('%Y-%m-%d')}.md"
-    yesterday_history_filename = f"{yesterday.strftime('%Y-%m-%d')}_summary.md"
-    today_filepath = os.path.join(base_path, today_filename)
-
-    # 优先查找历史文件，其次是主目录文件
-    yesterday_filepath_options = [
-        os.path.join(history_path, yesterday_history_filename),
-        os.path.join(base_path, yesterday_filename)
-    ]
     
-    yesterdays_plan = []
-    for y_path in yesterday_filepath_options:
-        if os.path.exists(y_path):
-            try:
-                with open(y_path, 'r', encoding='utf-8') as f:
-                    y_content = f.read()
-                yesterdays_plan = _parse_daily_summary(y_content).get("plan", [])
-                if yesterdays_plan:
-                    print(f"成功从 {y_path} 提取到昨天的计划。")
-                    break # 找到即停止
-            except Exception as e:
-                print(f"读取或解析昨日文件 {y_path} 失败: {e}")
-                continue
+    today_filepath = os.path.join(base_path, today_filename)
+    yesterday_filepath = os.path.join(base_path, yesterday_filename)
 
-    # 3. 检查今天的文件，如果不存在则创建（并迁移计划）
+    # 2. 判断是首次运行还是后续运行
     if not os.path.exists(today_filepath):
+        # --- 场景A: 当天首次运行 ---
+        yesterdays_plan = []
+        
+        # 2a. 查找并处理昨日文件
+        if os.path.exists(yesterday_filepath):
+            try:
+                with open(yesterday_filepath, 'r', encoding='utf-8') as f:
+                    y_content = f.read()
+                
+                # 从昨日文件中提取“明日计划”
+                yesterdays_plan = _parse_daily_summary(y_content).get("plan", [])
+                
+                # 归档昨日文件
+                archive_path = os.path.join(history_path, yesterday_filename)
+                shutil.move(yesterday_filepath, archive_path) # 使用 move 实现归档并删除
+                print(f"成功归档昨日文件到: {archive_path}")
+
+            except Exception as e:
+                print(f"处理昨日文件 {yesterday_filepath} 时出错: {e}")
+        
+        # 2b. 创建今日文件，并迁移计划
         _create_default_daily_template(today_filepath, plan_items_from_yesterday=yesterdays_plan)
         
-        email_html = f"<h4>模板已为您创建！</h4><p>系统已为您创建了今天的模板文件：</p><p><code>{today_filepath}</code></p>"
+        # 2c. 发送初始化邮件
+        email_html = f"<h4>今日总结已初始化！</h4><p>系统已为您创建了今天的模板文件：</p><p><code>{today_filepath}</code></p>"
         if yesterdays_plan:
-            email_html += "<p>并已将您昨天的“明日计划”自动迁移为今天的待办事项。请查收！</p>"
+            email_html += "<p>并已将您昨天的“明日计划”自动迁移为今天的待办事项。请开始新的一天吧！</p>"
         else:
             email_html += "<p>请立即填写今日的计划与总结吧！</p>"
             
-        return { "subject": f"每日总结提醒 ({today.strftime('%Y-%m-%d')})", "html": email_html }
+        return { "subject": f"✅ {today.strftime('%Y-%m-%d')} 新的一天，计划已就绪！", "html": email_html }
             
-    # 4. 读取并解析今天的现有文件
-    with open(today_filepath, 'r', encoding='utf-8') as f:
-        content = f.read()
-    
-    parsed_data = _parse_daily_summary(content)
-    
-    # 5. 保存历史记录 (在AI分析前保存原始数据)
-    history_summary_filename = f"{today.strftime('%Y-%m-%d')}_summary.md"
-    history_summary_filepath = os.path.join(history_path, history_summary_filename)
-    with open(history_summary_filepath, 'w', encoding='utf-8') as f:
-        f.write(content)
+    else:
+        # --- 场景B: 当天后续运行 ---
         
-    # 6. 构建AI Prompt
-    prompt = f"""
+        # 3a. 读取并解析今天的现有文件
+        with open(today_filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        parsed_data = _parse_daily_summary(content)
+        
+        # 3b. 将当前内容归档到history，但不删除源文件
+        history_summary_filepath = os.path.join(history_path, f"{today.strftime('%Y-%m-%d')}_summary_{datetime.datetime.now().strftime('%H%M%S')}.md")
+        try:
+            shutil.copy(today_filepath, history_summary_filepath)
+            print(f"成功将当前总结备份到: {history_summary_filepath}")
+        except Exception as e:
+             print(f"备份文件到history时出错: {e}")
+            
+        # 3c. 构建AI Prompt
+        prompt = f"""
 请你扮演我的私人助理，以积极、鼓励的语气，为我生成一份今日的总结报告。
 
 **我的今日数据:**
 - **已完成事项**: {', '.join(parsed_data['done']) if parsed_data['done'] else '无'}
 - **未完成事项**: {', '.join(parsed_data['todo']) if parsed_data['todo'] else '无'}
 - **今日任务完成率**: {parsed_data['progress']}%
+- **我的随手记**: {', '.join(parsed_data['notes']) if parsed_data['notes'] else '无'}
 - **我的明日计划**: {', '.join(parsed_data['plan']) if parsed_data['plan'] else '未计划'}
 
 **你的任务:**
@@ -416,32 +442,36 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
 
 请直接生成报告正文，使用Markdown格式，语言亲切自然。
 """
-    
-    # 7. 调用AI并构建邮件
-    ai_result = await llm_service.process_text_with_deepseek(prompt)
-    ai_analysis_html = convert_markdown_to_html(ai_result['content']) if ai_result['success'] else f"<p>AI分析失败: {ai_result['content']}</p>"
-
-    subject = f"你的专属每日总结报告 - {today.strftime('%Y-%m-%d')}"
-    html_content = f"""
-        <h4>今日任务完成度: {parsed_data['progress']}%</h4>
-        <div style="width: 100%; background-color: #e0e0e0; border-radius: 5px; height: 20px; overflow: hidden;">
-            <div style="background-color: #4CAF50; width: {parsed_data['progress']}%; height: 100%; text-align: center; color: white; line-height: 20px; font-weight: bold; border-radius: 5px;">{parsed_data['progress']}%</div>
-        </div>
-
-        <h4>✅ 已办清单</h4>
-        <ul>{''.join(f'<li>{item}</li>' for item in parsed_data['done']) if parsed_data['done'] else '<li>今日暂无完成事项</li>'}</ul>
-
-        <h4>📝 待办清单</h4>
-        <ul>{''.join(f'<li>{item}</li>' for item in parsed_data['todo']) if parsed_data['todo'] else '<li>太棒了！没有待办遗留！</li>'}</ul>
         
-        <h4>🚀 明日计划</h4>
-        <ul>{''.join(f'<li>{item}</li>' for item in parsed_data['plan']) if parsed_data['plan'] else '<li>暂未规划明日事项。</li>'}</ul>
+        # 3d. 调用AI并构建邮件
+        ai_result = await llm_service.process_text_with_deepseek(prompt)
+        ai_analysis_html = convert_markdown_to_html(ai_result['content']) if ai_result['success'] else f"<p>AI分析失败: {ai_result['content']}</p>"
 
-        <h4>💡 AI 智能助理分析</h4>
-        {ai_analysis_html}
-    """
-    
-    return {"subject": subject, "html": html_content}
+        subject = f"你的专属每日总结报告 - {today.strftime('%Y-%m-%d')}"
+        html_content = f"""
+            <h4>今日任务完成度: {parsed_data['progress']}%</h4>
+            <div style="width: 100%; background-color: #e0e0e0; border-radius: 5px; height: 20px; overflow: hidden;">
+                <div style="background-color: #4CAF50; width: {parsed_data['progress']}%; height: 100%; text-align: center; color: white; line-height: 20px; font-weight: bold; border-radius: 5px;">{parsed_data['progress']}%</div>
+            </div>
+
+            <h4>✅ 已办清单</h4>
+            <ul>{''.join(f'<li>{item}</li>' for item in parsed_data['done']) if parsed_data['done'] else '<li>今日暂无完成事项</li>'}</ul>
+
+            <h4>📝 待办清单</h4>
+            <ul>{''.join(f'<li>{item}</li>' for item in parsed_data['todo']) if parsed_data['todo'] else '<li>太棒了！没有待办遗留！</li>'}</ul>
+            
+            <h4>✍️ 随手记</h4>
+            <ul>{''.join(f'<li>{item}</li>' for item in parsed_data['notes']) if parsed_data['notes'] else '<li>暂无随手记录。</li>'}</ul>
+
+            <h4>🚀 明日计划</h4>
+            <ul>{''.join(f'<li>{item}</li>' for item in parsed_data['plan']) if parsed_data['plan'] else '<li>暂未规划明日事项。</li>'}</ul>
+
+            <h4>💡 AI 智能助理分析</h4>
+            {ai_analysis_html}
+        """
+        
+        return {"subject": subject, "html": html_content}
+# ========================== END: MODIFICATION (需求 ②) ============================
 
 
 # --- 步骤 2: 【新模板】周度总结与计划 ---

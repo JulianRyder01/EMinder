@@ -117,14 +117,14 @@ def main():
             form_ui["clear_attachments_btn"].click(lambda: ([], ""), outputs=[form_ui["attachment_state"], form_ui["attachment_display"]])
             form_ui["action_btn"].click(
                 handlers.send_or_schedule_email,
-                inputs=[form_ui["action_type"], shared_receiver_dd, form_ui["template_dd"], form_ui["custom_subject"], form_ui["send_at_input"], form_ui["attachment_state"]] + form_ui["all_field_inputs"],
+                inputs=[form_ui["action_type"], shared_receiver_dd, form_ui["template_dd"], form_ui["custom_subject"], form_ui["send_at_input"], form_ui["silent_run_checkbox"], form_ui["attachment_state"]] + form_ui["all_field_inputs"],
                 outputs=form_ui["output_text"]
             ).then(handlers.navigate_on_success, inputs=form_ui["output_text"], outputs=tabs).then(handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]])
             
         # Schedule Cron Job Tab Events
         cron_ui["create_btn"].click(
             handlers.handle_schedule_cron,
-            inputs=[cron_ui["job_name"], cron_ui["cron_string"], cron_ui["receiver_subscribers"], cron_ui["receiver_custom"], cron_ui["template_dd"], cron_ui["custom_subject"]] + cron_ui["all_field_inputs"],
+            inputs=[cron_ui["job_name"], cron_ui["cron_string"], cron_ui["receiver_subscribers"], cron_ui["receiver_custom"], cron_ui["template_dd"], cron_ui["custom_subject"], cron_ui["silent_run_checkbox"]] + cron_ui["all_field_inputs"],
             outputs=cron_ui["output_text"]
         ).then(handlers.navigate_on_success, inputs=cron_ui["output_text"], outputs=tabs).then(handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]])
         
@@ -142,7 +142,7 @@ def main():
             jobs_ui["edit_column"], jobs_ui["job_id_input"], jobs_ui["edit_id_state"], jobs_ui["edit_type_state"],
             jobs_ui["edit_template_dd"], jobs_ui["edit_custom_subject"], jobs_ui["edit_cron_group"], jobs_ui["edit_date_group"],
             jobs_ui["edit_cron_name"], jobs_ui["edit_cron_string"], jobs_ui["edit_cron_subscribers"],
-            jobs_ui["edit_date_receiver"], jobs_ui["edit_date_send_at"]
+            jobs_ui["edit_date_receiver"], jobs_ui["edit_date_send_at"], jobs_ui["edit_silent_run_checkbox"]
         ] + edit_dynamic_outputs
         jobs_ui["dataframe"].select(handlers.on_select_job, inputs=[jobs_ui["dataframe"]], outputs=edit_form_outputs_list)
         jobs_ui["cancel_edit_btn"].click(lambda: gr.update(visible=False), outputs=jobs_ui["edit_column"])
@@ -150,7 +150,8 @@ def main():
         edit_form_inputs_list = [
             jobs_ui["edit_id_state"], jobs_ui["edit_type_state"], jobs_ui["edit_cron_name"], jobs_ui["edit_cron_string"],
             jobs_ui["edit_cron_subscribers"], jobs_ui["edit_cron_custom"], jobs_ui["edit_date_receiver"],
-            jobs_ui["edit_date_send_at"], jobs_ui["edit_template_dd"], jobs_ui["edit_custom_subject"]
+            jobs_ui["edit_date_send_at"], jobs_ui["edit_template_dd"], jobs_ui["edit_custom_subject"],
+            jobs_ui["edit_silent_run_checkbox"]
         ] + jobs_ui["edit_all_field_inputs"]
         jobs_ui["update_btn"].click(
             handlers.handle_update_job, inputs=edit_form_inputs_list, outputs=jobs_ui["update_status"]

@@ -112,6 +112,9 @@ async def send_email_now(
     template_type: str = Form(...),
     template_data_str: str = Form(...),
     custom_subject: Optional[str] = Form(None),
+# ========================== START: MODIFICATION (需求 ①) ==========================
+    silent_run: bool = Form(False),
+# ========================== END: MODIFICATION (需求 ①) ============================
     attachments: List[UploadFile] = File(default=[])
 ):
     if not receiver_email or not template_type:
@@ -145,21 +148,31 @@ async def send_email_now(
     # 将模板自身生成的附件路径与用户上传的临时文件路径合并
     final_attachments = email_content.get("attachments", []) + temp_file_paths
 
-    background_tasks.add_task(
-        email_service.send_email,
-        receiver_email,
-        final_subject,
-        email_content["html"],
-        attachments=final_attachments, # 传递合并后的附件列表
-        embedded_images=email_content.get("embedded_images", [])
-    )
+# ========================== START: MODIFICATION (需求 ①) ==========================
+    # DESIGNER'S NOTE:
+    # 对于“立即发送”，我们直接在API层判断。如果为静默运行，则只记录日志，不添加邮件发送任务。
+    # 模板自身的逻辑（如文件操作）已经在上面 await template_func(template_data) 时执行完毕。
+    if silent_run:
+        logger.info(f"Silent run triggered for 'send-now'. Template '{template_type}' logic executed, but email to {receiver_email} was suppressed.")
+        message = "静默运行成功！模板逻辑已执行，邮件未发送。"
+    else:
+        background_tasks.add_task(
+            email_service.send_email,
+            receiver_email,
+            final_subject,
+            email_content["html"],
+            attachments=final_attachments, # 传递合并后的附件列表
+            embedded_images=email_content.get("embedded_images", [])
+        )
+        message = f"邮件正在发送至 {receiver_email}。"
+# ========================== END: MODIFICATION (需求 ①) ============================
     
     # 为所有临时文件添加清理任务
     if temp_file_paths:
         for path in temp_file_paths:
             background_tasks.add_task(os.remove, path)
     
-    return {"status": "success", "message": f"邮件正在发送至 {receiver_email}。"}
+    return {"status": "success", "message": message}
 
 
 @router.post("/schedule-once")
@@ -169,6 +182,9 @@ async def schedule_email_once(
     send_at_str: str = Form(...),
     template_data_str: str = Form(...),
     custom_subject: Optional[str] = Form(None),
+# ========================== START: MODIFICATION (需求 ①) ==========================
+    silent_run: bool = Form(False),
+# ========================== END: MODIFICATION (需求 ①) ============================
     attachments: List[UploadFile] = File(default=[])
 ):
     """
@@ -205,6 +221,9 @@ async def schedule_email_once(
         "template_data": template_data,
         "custom_subject": custom_subject,
         "temp_file_paths": temp_file_paths,
+# ========================== START: MODIFICATION (需求 ①) ==========================
+        "silent_run": silent_run  # 将静默运行标志传递给任务
+# ========================== END: MODIFICATION (需求 ①) ============================
     }
 
     job = scheduler_service.scheduler.add_job(
@@ -242,6 +261,9 @@ async def schedule_email_cron(request: Request):
     template_data = payload.get("template_data", {})
     receiver_emails = payload.get("receiver_emails", [])
     custom_subject = payload.get("custom_subject") # 新增
+# ========================== START: MODIFICATION (需求 ①) ==========================
+    silent_run = payload.get("silent_run", False) # 新增
+# ========================== END: MODIFICATION (需求 ①) ============================
 
     if not all([job_name, cron_string, template_type, receiver_emails]):
         raise HTTPException(status_code=422, detail="请求体中缺少 'job_name', 'cron_string', 'template_type' 或 'receiver_emails'。")
@@ -259,7 +281,10 @@ async def schedule_email_cron(request: Request):
             "receiver_emails": receiver_emails,
             "template_type": template_type,
             "template_data": template_data,
-            "custom_subject": custom_subject
+            "custom_subject": custom_subject,
+# ========================== START: MODIFICATION (需求 ①) ==========================
+            "silent_run": silent_run  # 将静默运行标志传递给任务
+# ========================== END: MODIFICATION (需求 ①) ============================
         }
         
         job = scheduler_service.add_cron_job(

@@ -92,6 +92,9 @@ async def _send_custom_cron_email_task(**kwargs):
     template_type = kwargs.get("template_type")
     data = kwargs.get("template_data", {})
     custom_subject = kwargs.get("custom_subject")
+# ========================== START: MODIFICATION (需求 ①) ==========================
+    silent_run = kwargs.get("silent_run", False)
+# ========================== END: MODIFICATION (需求 ①) ============================
 
     logger.info(f"Executing cron job: [ID: {job_id}, Name: {job_name}]. Sending template '{template_type}' to {len(receiver_emails)} recipients.")
     try:
@@ -119,20 +122,25 @@ async def _send_custom_cron_email_task(**kwargs):
         attachments_to_send = email_content.get("attachments", [])
         embedded_images_to_send = email_content.get("embedded_images", [])
 
-        tasks = []
-        for email in receiver_emails:
-            task = email_service.send_email(
-                receiver_email=email,
-                subject=final_subject,
-                html_content=email_content["html"],
-                attachments=attachments_to_send,
-                embedded_images=embedded_images_to_send,
-            )
-            tasks.append(task)
-            
-        # 并发执行所有邮件发送任务
-        if tasks:
-            await asyncio.gather(*tasks)
+# ========================== START: MODIFICATION (需求 ①) ==========================
+        if silent_run:
+            logger.info(f"Silent run for cron job [ID: {job_id}, Name: {job_name}]. Email sending was suppressed.")
+        else:
+            tasks = []
+            for email in receiver_emails:
+                task = email_service.send_email(
+                    receiver_email=email,
+                    subject=final_subject,
+                    html_content=email_content["html"],
+                    attachments=attachments_to_send,
+                    embedded_images=embedded_images_to_send,
+                )
+                tasks.append(task)
+                
+            # 并发执行所有邮件发送任务
+            if tasks:
+                await asyncio.gather(*tasks)
+# ========================== END: MODIFICATION (需求 ①) ============================
         
         # ========================== START: MODIFICATION (Logging) ==========================
         logger.info(f"Cron job [ID: {job_id}, Name: {job_name}] executed successfully.")
@@ -174,6 +182,9 @@ class SchedulerService:
         data = kwargs.get("template_data", {})
         custom_subject = kwargs.get("custom_subject")
         temp_file_paths = kwargs.get("temp_file_paths", [])
+# ========================== START: MODIFICATION (需求 ①) ==========================
+        silent_run = kwargs.get("silent_run", False)
+# ========================== END: MODIFICATION (需求 ①) ============================
 
         logger.info(f"Executing one-time job: [ID: {job_id}]. Sending template '{template_type}' to '{receiver_email}'.")
         # ========================== END: MODIFICATION (Logging) ============================
@@ -194,13 +205,18 @@ class SchedulerService:
                         if os.path.exists(temp_path):
                             final_attachments.append(temp_path)
                 
-                await email_service.send_email(
-                    receiver_email,
-                    final_subject,
-                    email_content["html"],
-                    attachments=final_attachments,
-                    embedded_images=email_content.get("embedded_images", [])
-                )
+# ========================== START: MODIFICATION (需求 ①) ==========================
+                if silent_run:
+                    logger.info(f"Silent run for one-time job [ID: {job_id}]. Email sending was suppressed.")
+                else:
+                    await email_service.send_email(
+                        receiver_email,
+                        final_subject,
+                        email_content["html"],
+                        attachments=final_attachments,
+                        embedded_images=email_content.get("embedded_images", [])
+                    )
+# ========================== END: MODIFICATION (需求 ①) ============================
                 logger.info(f"One-time job [ID: {job_id}] executed successfully.")
             else:
                 logger.error(f"One-time job [ID: {job_id}] failed: Template '{template_type}' not found.")

@@ -66,6 +66,9 @@ def create_email_form(is_scheduled: bool):
         clear_attachments_btn = gr.Button("🗑️ 清空列表")
 
     gr.Markdown("### 5. 执行操作")
+# ========================== START: MODIFICATION (需求 ①) ==========================
+    silent_run_checkbox = gr.Checkbox(label="静默运行", info="勾选后，任务将正常执行（包括脚本运行、文件归档等），但不会发送邮件。")
+# ========================== END: MODIFICATION (需求 ①) ============================
     if is_scheduled:
         now_plus_10 = (datetime.datetime.now() + datetime.timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M")
         send_at_input = gr.Textbox(label="预定发送时间", value=now_plus_10, info="格式: YYYY-MM-DD HH:MM")
@@ -88,7 +91,8 @@ def create_email_form(is_scheduled: bool):
         "attachment_state": attachment_state, "attachment_display": attachment_display,
         "file_uploader": file_uploader, "clear_attachments_btn": clear_attachments_btn,
         "send_at_input": send_at_input, "action_btn": action_btn, "action_type": action_type,
-        "output_text": output_text
+        "output_text": output_text,
+        "silent_run_checkbox": silent_run_checkbox
     }
     return components
     
@@ -123,6 +127,9 @@ def create_cron_job_tab():
                         dynamic_fields_components.append({"group": fg, "text": ct, "number": cn})
         
         gr.Markdown("### 4. 创建任务")
+# ========================== START: MODIFICATION (需求 ①) ==========================
+        silent_run_checkbox = gr.Checkbox(label="静默运行", info="勾选后，任务将正常执行（包括脚本运行、文件归档等），但不会发送邮件。")
+# ========================== END: MODIFICATION (需求 ①) ============================
         with gr.Row():
             create_btn = gr.Button("✔️ 创建周期任务", variant="primary")
         output_text = gr.Textbox(label="操作结果", interactive=False)
@@ -134,7 +141,10 @@ def create_cron_job_tab():
         "receiver_custom": receiver_custom, "load_status": load_status, "template_dd": template_dd,
         "custom_subject": custom_subject, "dynamic_form_area": dynamic_form_area, "form_description": form_description,
         "dynamic_fields": dynamic_fields_components, "all_field_inputs": all_field_inputs,
-        "create_btn": create_btn, "output_text": output_text
+        "create_btn": create_btn, "output_text": output_text,
+# ========================== START: MODIFICATION (需求 ①) ==========================
+        "silent_run_checkbox": silent_run_checkbox
+# ========================== END: MODIFICATION (需求 ①) ============================
     }
     return components
 
@@ -188,6 +198,9 @@ def create_job_management_tab():
                                 en = gr.Number(label=f"字段{i+1}", visible=False)
                             edit_dynamic_fields.append({"group": fg, "text": et, "number": en})
                     
+# ========================== START: MODIFICATION (需求 ①) ==========================
+                    edit_silent_run_checkbox = gr.Checkbox(label="静默运行", info="勾选后，任务将正常执行，但不会发送邮件。")
+# ========================== END: MODIFICATION (需求 ①) ============================
                     with gr.Row():
                         update_btn = gr.Button("✔️ 更新任务", variant="primary")
                         cancel_edit_btn = gr.Button("❌ 取消编辑")
@@ -205,7 +218,10 @@ def create_job_management_tab():
         "edit_template_dd": edit_template_dd, "edit_custom_subject": edit_custom_subject,
         "edit_dynamic_area": edit_dynamic_area, "edit_form_desc": edit_form_desc,
         "edit_dynamic_fields": edit_dynamic_fields, "edit_all_field_inputs": edit_all_field_inputs,
-        "update_btn": update_btn, "cancel_edit_btn": cancel_edit_btn, "update_status": update_status
+        "update_btn": update_btn, "cancel_edit_btn": cancel_edit_btn, "update_status": update_status,
+# ========================== START: MODIFICATION (需求 ①) ==========================
+        "edit_silent_run_checkbox": edit_silent_run_checkbox
+# ========================== END: MODIFICATION (需求 ①) ============================
     }
     return components
 

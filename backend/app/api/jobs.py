@@ -117,7 +117,10 @@ async def update_scheduled_job(job_id: str, payload: Dict[str, Any] = Body(...))
                 "template_type": payload.get("template_type"),
                 "template_data": payload.get("template_data", {}),
                 "custom_subject": payload.get("custom_subject"),
-                "temp_file_paths": job.kwargs.get("temp_file_paths", []) # 保留旧的附件
+                "temp_file_paths": job.kwargs.get("temp_file_paths", []), # 保留旧的附件
+# ========================== START: MODIFICATION (需求 ①) ==========================
+                "silent_run": payload.get("silent_run", False)  # 添加静默运行标志
+# ========================== END: MODIFICATION (需求 ①) ============================
             }
             
             scheduler_service.scheduler.modify_job(job_id, kwargs=new_kwargs) # <-- 使用 kwargs
@@ -134,7 +137,10 @@ async def update_scheduled_job(job_id: str, payload: Dict[str, Any] = Body(...))
                 "receiver_emails": payload.get("receiver_emails", []),
                 "template_type": payload.get("template_type"),
                 "template_data": payload.get("template_data", {}),
-                "custom_subject": payload.get("custom_subject")
+                "custom_subject": payload.get("custom_subject"),
+# ========================== START: MODIFICATION (需求 ①) ==========================
+                "silent_run": payload.get("silent_run", False)  # 添加静默运行标志
+# ========================== END: MODIFICATION (需求 ①) ============================
             }
             new_name = payload.get("job_name")
 

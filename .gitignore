@@ -7,3 +7,4 @@ directory_listing_with_content.txt
 backend/eminder.db
 Procfile
 *.log
+tests/
