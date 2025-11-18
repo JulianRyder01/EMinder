@@ -164,6 +164,38 @@ async def update_scheduled_job(job_id: str, payload: Dict[str, Any] = Body(...))
         raise HTTPException(status_code=500, detail=f"更新任务时发生错误: {str(e)}")
 
 
+# ========================== START: MODIFICATION ==========================
+# DESIGNER'S NOTE:
+# 新增此 API 端点，用于实现“立即运行”功能。
+# 它通过将任务的 `next_run_time` 修改为当前时间来安全地触发一次执行，
+# 而不会影响任务原有的调度规则（例如 Cron 表达式）。
+@router.post("/jobs/{job_id}/run")
+def run_job_now(job_id: str):
+    """
+    【新增】立即触发一次指定的计划任务，用于调试。
+    """
+    try:
+        # 获取调度器实例以访问其时区设置
+        scheduler = scheduler_service.scheduler
+        job = scheduler.get_job(job_id)
+        if not job:
+            raise JobLookupError
+
+        # 设置 next_run_time 为当前时间，以立即触发任务
+        scheduler.modify_job(job_id, next_run_time=datetime.datetime.now(scheduler.timezone))
+        
+        logger.info(f"API: Job [ID: {job_id}] was manually triggered for immediate execution.")
+        return {"status": "success", "message": f"任务 {job_id} 已被触发，将立即在后台执行。"}
+
+    except JobLookupError:
+        logger.warning(f"API: Attempted to manually run a non-existent job with ID: {job_id}")
+        raise HTTPException(status_code=404, detail=f"未找到ID为 {job_id} 的任务。")
+    except Exception as e:
+        logger.error(f"API: Error manually running job '{job_id}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"触发任务时发生错误: {str(e)}")
+# ========================== END: MODIFICATION ============================
+
+
 @router.delete("/jobs/{job_id}")
 def cancel_scheduled_job(job_id: str):
     """

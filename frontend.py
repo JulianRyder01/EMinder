@@ -493,6 +493,34 @@ def handle_update_job(job_id:str, job_type:str, # State
         gr.Error(f"更新失败: {error_detail}")
         return f"更新失败: {error_detail}"
 
+# ========================== START: MODIFICATION ==========================
+# DESIGNER'S NOTE:
+# 新增此函数，用于处理“立即运行”按钮的点击事件。
+# 它会向后端新创建的 /run 端点发送请求。
+def handle_run_job_now(job_id_to_run: str):
+    """【新增】根据ID调用后端API立即运行一个任务"""
+    if not job_id_to_run or not job_id_to_run.strip():
+        gr.Warning("无法运行：没有提供任务ID。")
+        return "无法运行：没有提供任务ID。"
+    
+    try:
+        url = f"{JOBS_URL}/{job_id_to_run.strip()}/run"
+        response = requests.post(url) # 使用 POST
+        response.raise_for_status()
+        msg = response.json().get("message", "任务已触发执行。")
+        gr.Info(msg)
+        return msg
+    except requests.RequestException as e:
+        error_detail = "未知错误"
+        try:
+            error_detail = e.response.json().get('detail', e.response.text)
+        except Exception:
+            pass
+        gr.Warning(f"操作失败: {error_detail}")
+        return f"操作失败: {error_detail}"
+# ========================== END: MODIFICATION ============================
+
+
 # --- Gradio 界面构建 ---
 
 with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), title="EMinder 控制中心") as demo:
@@ -804,6 +832,10 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
                         
                         with gr.Row():
                             update_button = gr.Button("✔️ 更新任务", variant="primary")
+                            # ========================== START: MODIFICATION ==========================
+                            # DESIGNER'S NOTE: 在此行中添加新按钮。
+                            run_now_button = gr.Button("▶️ 立即运行 (调试)", variant="secondary")
+                            # ========================== END: MODIFICATION ============================
                             cancel_edit_button = gr.Button("❌ 取消编辑")
                         update_status_output = gr.Textbox(label="更新结果", interactive=False)
 
@@ -1018,6 +1050,15 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
     ).then(
         lambda: gr.update(visible=False), outputs=edit_job_column
     )
+
+    # ========================== START: MODIFICATION ==========================
+    # DESIGNER'S NOTE: 为新添加的“立即运行”按钮绑定点击事件。
+    run_now_button.click(
+        fn=handle_run_job_now,
+        inputs=[edit_job_id_state],      # 使用 state 组件中存储的当前任务 ID
+        outputs=[update_status_output]   # 将操作结果复用到“更新结果”文本框
+    )
+    # ========================== END: MODIFICATION ============================
     
 # ========================== START: MODIFICATION (Requirement ③) ==========================
 # DESIGNER'S NOTE:
