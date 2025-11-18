@@ -1,59 +1,78 @@
-# backend/app/services/llm_service.py (新文件)
+# backend/app/services/llm_service.py (重构后)
+import httpx
+import logging
+from ..storage.sqlite_store import store # 导入 store 实例
 
-import httpx # 导入异步 HTTP 客户端库
-from ..core.config import settings
+# ========================== START: MODIFICATION ==========================
+# DESIGNER'S NOTE:
+# 整个 LLMService 被重构，使其成为一个动态的、数据驱动的服务。
+# 它不再从环境变量读取配置，而是从数据库中查询当前被标记为 "active" 的配置来执行 API 调用。
 
 class LLMService:
     """
     处理与大语言模型 (LLM) API 交互的业务逻辑。
+    这是一个动态服务，它会使用数据库中标记为“激活”的配置。
     """
 
     def __init__(self):
-        self.api_key = settings.DEEPSEEK_API_KEY
-        self.api_endpoint = settings.DEEPSEEK_API_ENDPOINT
-        self.model_name = "deepseek-chat"
         self.request_timeout = 60  # 设置 API 请求超时时间为60秒
+        self.logger = logging.getLogger(__name__)
 
-        if not self.api_key:
-            # 仅在服务初始化时打印警告，而不是中止整个应用
-            print("警告: DEEPSEEK_API_KEY 未在 .env 文件中配置。大模型相关功能将不可用。")
-
-    async def process_text_with_deepseek(self, text_ori: str) -> dict:
+    async def generate_text(self, prompt: str) -> dict:
         """
-        【异步改造】使用 DeepSeek API 处理输入文本。
-        使用 httpx 实现非阻塞的 API 请求。
+        使用当前激活的 LLM 配置处理输入文本。
 
-        :param text_ori: 原始输入文本。
+        :param prompt: 发送给大模型的提示词。
         :return: 一个包含处理结果或错误信息的字典。
                  成功: {"success": True, "content": "处理后的文本"}
                  失败: {"success": False, "content": "错误信息详情"}
         """
-        # 如果没有配置API Key，直接返回错误信息
-        if not self.api_key:
+        # 1. 从数据库获取当前激活的配置
+        active_config = store.get_active_llm_config()
+
+        if not active_config:
+            self.logger.warning("LLM调用失败：数据库中没有设置任何激活的大模型服务。")
             return {
                 "success": False,
-                "content": "无法连接到大模型服务：管理员尚未配置 API Key。"
+                "content": "无法连接到大模型服务：管理员尚未在设置页面中指定一个当前服务。"
             }
 
+        api_url = active_config.get("api_url")
+        api_key = active_config.get("api_key")
+        model_name = active_config.get("model_name")
+        provider_name = active_config.get("provider_name")
+
+        if not all([api_url, api_key, model_name]):
+            self.logger.error(f"LLM配置不完整 (ID: {active_config.get('id')})。缺少 URL、Key 或模型名称。")
+            return {
+                "success": False,
+                "content": f"配置错误：名为 '{provider_name}' 的服务配置不完整。"
+            }
+
+        # 2. 准备请求（兼容OpenAI的格式）
+        #    适用于 DeepSeek, SiliconFlow 等绝大多数厂商
+        full_endpoint = f"{api_url.rstrip('/')}/chat/completions"
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
+            "Authorization": f"Bearer {api_key}"
         }
-
         payload = {
-            "model": self.model_name,
+            "model": model_name,
             "messages": [
                 {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": text_ori}
+                {"role": "user", "content": prompt}
             ],
             "stream": False
         }
 
+        self.logger.info(f"正在通过 '{provider_name}' (模型: {model_name}) 发送请求至 '{full_endpoint}'...")
+
+        # 3. 发送异步HTTP请求
         try:
             # 使用 httpx.AsyncClient 发送异步 POST 请求
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.api_endpoint}/chat/completions",
+                    full_endpoint,
                     headers=headers,
                     json=payload,
                     timeout=self.request_timeout
@@ -69,34 +88,34 @@ class LLMService:
                 first_choice = response_data["choices"][0]
                 if "message" in first_choice and "content" in first_choice["message"]:
                     processed_content = first_choice["message"]["content"]
+                    self.logger.info("成功从LLM服务获取到响应。")
                     return {"success": True, "content": processed_content}
 
-            # 如果响应结构不符合预期，返回错误
-            error_message = f"API 响应格式不正确，缺少有效内容。响应详情: {response_data}"
-            print(error_message)
+            error_message = f"API 响应格式不正确，缺少有效内容。服务商: {provider_name}, 响应: {response_data}"
+            self.logger.error(error_message)
             return {"success": False, "content": error_message}
 
         except httpx.HTTPStatusError as http_err:
             # 处理 HTTP 错误，例如 401, 429, 500
             error_details = f"HTTP 错误: {http_err.response.status_code} {http_err.response.reason_phrase}"
             try:
-                api_error = http_err.response.json().get("error", {}).get("message", "无详细信息")
+                # 尝试解析API返回的具体错误信息
+                api_error_body = http_err.response.json()
+                api_error = api_error_body.get("error", {}).get("message", str(api_error_body))
                 error_details += f"\nAPI 错误信息: {api_error}"
             except Exception:
-                pass
-            print(error_details)
+                error_details += f"\n原始响应: {http_err.response.text}"
+            self.logger.error(f"调用 '{provider_name}' 时发生HTTP错误: {error_details}")
             return {"success": False, "content": error_details}
 
         except httpx.RequestError as req_err:
-            # 处理网络相关的错误，例如连接超时、DNS错误
-            error_message = f"网络请求失败: 无法连接到 DeepSeek API。请检查网络连接或 API 端点配置。错误详情: {req_err}"
-            print(error_message)
+            error_message = f"网络请求失败: 无法连接到 '{provider_name}' 的API地址 ({api_url})。请检查网络或配置。错误详情: {req_err}"
+            self.logger.error(error_message)
             return {"success": False, "content": error_message}
             
         except Exception as e:
-            # 捕获其他所有未知异常
             error_message = f"处理文本时发生未知错误: {e}"
-            print(error_message)
+            self.logger.error(error_message, exc_info=True)
             return {"success": False, "content": error_message}
 
 

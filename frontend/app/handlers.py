@@ -31,6 +31,14 @@ def get_emails_from_selection_list(selections: list[str]) -> list[str]:
 
 def find_selection_from_email(email: str) -> str:
     """Finds the full dropdown choice string from a pure email address."""
+    # 确保 state.SUBSCRIBER_CHOICES 是最新的
+    if not state.SUBSCRIBER_CHOICES:
+        # 如果全局状态为空，尝试从后端获取一次
+        try:
+            subs = api_client.get_subscribers()
+            state.SUBSCRIBER_CHOICES = [f"{s.get('remark_name', s['email'])} <{s['email']}>" for s in subs]
+        except:
+             return email # 如果获取失败，返回原始 email
     return next((choice for choice in state.SUBSCRIBER_CHOICES if f"<{email}>" in choice), email)
 
 def find_selections_from_emails(emails: list[str]) -> list[str]:
@@ -93,8 +101,13 @@ def refresh_subscribers_list():
         df = pd.DataFrame(subs, columns=["email", "remark_name"]).rename(columns={"email": "邮箱地址", "remark_name": "备注名"}) if subs else pd.DataFrame(columns=["邮箱地址", "备注名"])
         msg = f"✅ 订阅列表已于 {datetime.datetime.now().strftime('%H:%M:%S')} 刷新。"
         
-        # Returns updates for: dataframe, status message, manual send dropdown, cron job checkboxes, job edit dropdown
-        return df, msg, gr.update(choices=state.SUBSCRIBER_CHOICES, value=None), gr.update(choices=state.SUBSCRIBER_CHOICES, value=None), gr.update(choices=state.SUBSCRIBER_CHOICES, value=None)
+        # ========================== START: MODIFICATION ==========================
+        # DESIGNER'S NOTE:
+        # 修正返回值数量，确保与 main.py 中连接的所有组件（7个）完全对应。
+        subscriber_list_update = gr.update(choices=state.SUBSCRIBER_CHOICES, value=None)
+        return df, msg, subscriber_list_update, subscriber_list_update, subscriber_list_update, subscriber_list_update, subscriber_list_update
+        # ========================== END: MODIFICATION ============================
+
     except requests.RequestException as e:
         msg = f"🔴 获取订阅列表失败: {e}"
         gr.Warning(msg)
@@ -182,9 +195,7 @@ def cancel_job_by_id(job_id_to_cancel: str):
         gr.Warning(f"操作失败: {error_detail}")
         return f"操作失败: {error_detail}"
 
-# ========================== START: MODIFICATION (需求 ①) ==========================
 def send_or_schedule_email(action, receiver_selection, template_choice, custom_subject, send_at, silent_run, attachment_files_list, *dynamic_field_values):
-# ========================== END: MODIFICATION (需求 ①) ============================
     """Callback to handle both 'send now' and 'schedule once' actions."""
     receiver_email = get_email_from_selection(receiver_selection)
     if not receiver_email or not template_choice:
@@ -200,9 +211,7 @@ def send_or_schedule_email(action, receiver_selection, template_choice, custom_s
     form_data = {
         "receiver_email": receiver_email, "template_type": template_key,
         "template_data_str": json.dumps(template_data), "custom_subject": custom_subject or "",
-# ========================== START: MODIFICATION (需求 ①) ==========================
         "silent_run": silent_run
-# ========================== END: MODIFICATION (需求 ①) ============================
     }
     
     url = ""
@@ -458,3 +467,114 @@ def on_select_job(df_input: pd.DataFrame, evt: gr.SelectData):
         return [gr.update()] * TOTAL_EDIT_OUTPUTS
 
 # ========================== END: MODIFICATION (File Splitting) ============================
+
+def refresh_llm_configs():
+    """回调函数：从后端获取并刷新LLM配置列表。"""
+    columns = ["ID", "当前服务", "服务商名称", "API URL", "API Key (末4位)", "模型名称"]
+    try:
+        configs = api_client.get_llm_configs()
+        
+        # 格式化数据以适应DataFrame
+        formatted_data = []
+        for config in configs:
+            formatted_data.append({
+                "ID": config['id'],
+                "当前服务": "✅ 是" if config['is_active'] else "否",
+                "服务商名称": config['provider_name'],
+                "API URL": config['api_url'],
+                "API Key (末4位)": config['api_key'],
+                "模型名称": config['model_name']
+            })
+        
+        df = pd.DataFrame(formatted_data, columns=columns)
+        msg = f"✅ LLM配置列表已于 {datetime.datetime.now().strftime('%H:%M:%S')} 刷新。"
+        return df, msg
+    except requests.RequestException as e:
+        error_detail = e.response.json().get('detail', str(e)) if e.response else str(e)
+        msg = f"🔴 获取LLM配置列表失败: {error_detail}"
+        gr.Warning(msg)
+        return pd.DataFrame([], columns=columns), msg
+
+def on_select_llm_config(df: pd.DataFrame, evt: gr.SelectData):
+    """回调函数：当用户在LLM配置表格中选中一行时，填充编辑表单。"""
+    if df.empty or evt.index is None:
+        return [gr.update()] * 5 # ID, provider, url, key, model
+
+    selected_row = df.iloc[evt.index[0]]
+    config_id = selected_row['ID']
+    
+    # 需要从原始数据（未格式化）中找到完整信息，但这里无法直接获取
+    # 因此我们只填充已知信息，并提示用户API Key需要重新输入
+    provider_name = selected_row['服务商名称']
+    api_url = selected_row['API URL']
+    model_name = selected_row['模型名称']
+
+    # 返回ID状态、以及各个输入框的值
+    return config_id, provider_name, api_url, "", model_name
+
+def clear_llm_form_inputs():
+    """回调函数：清空LLM配置表单的输入。"""
+    return None, "", "", "", "" # id_state, provider, url, key, model
+
+def handle_save_llm_config(config_id, provider_name, api_url, api_key, model_name):
+    """回调函数：保存（添加或更新）一个LLM配置。"""
+    if not all([provider_name, api_url, model_name]):
+        gr.Warning("服务商名称、API URL 和模型名称为必填项。")
+        return
+        
+    payload = {
+        "provider_name": provider_name,
+        "api_url": api_url,
+        "api_key": api_key, # 如果是更新且此项为空，后端会忽略
+        "model_name": model_name
+    }
+
+    try:
+        if config_id: # 更新
+            if not api_key:
+                # 提醒用户，如果他们只是想修改其他字段
+                gr.Info("API Key留空，将不会被修改。")
+            response = api_client.update_llm_config(config_id, payload)
+        else: # 添加
+            if not api_key:
+                gr.Warning("添加新配置时，API Key不能为空。")
+                return
+            response = api_client.add_llm_config(payload)
+        
+        gr.Info(response.get("message", "操作成功！"))
+
+    except requests.RequestException as e:
+        error_detail = e.response.json().get('detail', str(e)) if e.response else str(e)
+        gr.Error(f"保存失败: {error_detail}")
+
+def handle_delete_llm_config(config_id: int):
+    """回调函数：删除一个LLM配置。"""
+    if not config_id:
+        gr.Warning("请先从列表中选择一个要删除的配置。")
+        return "操作失败：未选择配置。"
+    try:
+        response = api_client.delete_llm_config(config_id)
+        msg = response.get("message", "删除成功！")
+        gr.Info(msg)
+        return msg
+    except requests.RequestException as e:
+        error_detail = e.response.json().get('detail', str(e)) if e.response else str(e)
+        gr.Error(f"删除失败: {error_detail}")
+        return f"删除失败: {error_detail}"
+
+def handle_set_active_llm_config(config_id: int):
+    """回调函数：设置一个LLM配置为当前服务。"""
+    if not config_id:
+        gr.Warning("请先从列表中选择一个要设为当前服务的配置。")
+        return "操作失败：未选择配置。"
+    try:
+        response = api_client.set_active_llm_config(config_id)
+        msg = response.get("message", "设置成功！")
+        gr.Info(msg)
+        return msg
+    except requests.RequestException as e:
+        error_detail = e.response.json().get('detail', str(e)) if e.response else str(e)
+        gr.Error(f"设置失败: {error_detail}")
+        return f"设置失败: {error_detail}"
+
+# ========================== END: MODIFICATION ============================

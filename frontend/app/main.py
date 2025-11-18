@@ -51,6 +51,11 @@ def main():
             
             cron_ui = ui.create_cron_job_tab()
             jobs_ui = ui.create_job_management_tab()
+            
+            # ========================== START: MODIFICATION ==========================
+            # DESIGNER'S NOTE: 添加新的LLM配置选项卡
+            llm_ui = ui.create_llm_settings_tab()
+            # ========================== END: MODIFICATION ============================
 
         # --- 3. Wire Event Handlers ---
 
@@ -70,25 +75,30 @@ def main():
                 manual_ui["template_dd"], manual_ui["load_status"],
                 schedule_ui["template_dd"], schedule_ui["load_status"],
                 cron_ui["template_dd"], cron_ui["load_status"],
-                jobs_ui["edit_template_dd"] # <-- 遗漏点：任务编辑区的模板下拉框
+                jobs_ui["edit_template_dd"]
             ]
         )
         
-        # Initial data loading for subscribers - targets ALL subscriber components.
-        demo.load(
-            handlers.refresh_subscribers_list, 
-            outputs=[
-                sub_ui["dataframe"], sub_ui["status_output"], 
-                shared_receiver_dd,             # <-- The single shared dropdown
-                cron_ui["receiver_subscribers"],# <-- Cron job subscriber checkboxes
-                jobs_ui["edit_date_receiver"]   # <-- Job edit 'date' receiver dropdown
-            ]
-        )
-        # ========================== END: CORRECTION (Omission Fix) ============================
-
-
+        # ========================== START: MODIFICATION ==========================
+        # DESIGNER'S NOTE:
+        # 修正了 sub_refresh_outputs 列表，确保所有需要订阅者列表的组件都被包含在内。
+        # 列表现在包含7个组件，与 handler 的返回值一一对应。
+        sub_refresh_outputs = [
+            sub_ui["dataframe"], 
+            sub_ui["status_output"], 
+            manual_ui["receiver_dd"], 
+            schedule_ui["receiver_dd"], 
+            cron_ui["receiver_subscribers"],
+            jobs_ui["edit_date_receiver"],    # 编辑表单中的 'date' 类型任务接收者
+            jobs_ui["edit_cron_subscribers"]  # 编辑表单中的 'cron' 类型任务接收者
+        ]
+        # ========================== END: MODIFICATION ============================
+        
+        # 在应用加载时也执行一次订阅者刷新
+        demo.load(handlers.refresh_subscribers_list, outputs=sub_refresh_outputs)
+        
         # Subscriber Management Tab Events
-        sub_refresh_outputs = [sub_ui["dataframe"], sub_ui["status_output"], shared_receiver_dd, cron_ui["receiver_subscribers"], jobs_ui["edit_date_receiver"]]
+        sub_ui["tab"].select(handlers.refresh_subscribers_list, outputs=sub_refresh_outputs) # 选中Tab时刷新
         sub_ui["refresh_btn"].click(handlers.refresh_subscribers_list, outputs=sub_refresh_outputs)
         sub_ui["add_btn"].click(handlers.handle_add_subscriber, inputs=[sub_ui["email_input"], sub_ui["remark_input"]]).then(handlers.refresh_subscribers_list, outputs=sub_refresh_outputs)
         sub_ui["delete_btn"].click(handlers.handle_delete_subscriber, inputs=[sub_ui["email_input"]]).then(handlers.refresh_subscribers_list, outputs=sub_refresh_outputs)
@@ -109,6 +119,7 @@ def main():
         
         # Manual & Schedule Once Form Events
         for form_ui in [manual_ui, schedule_ui]:
+            form_ui["template_dd"].change(partial(handlers.toggle_template_fields, ui.MAX_FIELDS), inputs=form_ui["template_dd"], outputs=form_ui["dynamic_outputs"])
             form_ui["file_uploader"].upload(
                 lambda cur, new: (sorted(list(set(cur+new))), "\n".join(sorted(list(set(cur+new))))),
                 inputs=[form_ui["attachment_state"], form_ui["file_uploader"]],
@@ -117,11 +128,12 @@ def main():
             form_ui["clear_attachments_btn"].click(lambda: ([], ""), outputs=[form_ui["attachment_state"], form_ui["attachment_display"]])
             form_ui["action_btn"].click(
                 handlers.send_or_schedule_email,
-                inputs=[form_ui["action_type"], shared_receiver_dd, form_ui["template_dd"], form_ui["custom_subject"], form_ui["send_at_input"], form_ui["silent_run_checkbox"], form_ui["attachment_state"]] + form_ui["all_field_inputs"],
+                inputs=[form_ui["action_type"], form_ui["receiver_dd"], form_ui["template_dd"], form_ui["custom_subject"], form_ui["send_at_input"], form_ui["silent_run_checkbox"], form_ui["attachment_state"]] + form_ui["all_field_inputs"],
                 outputs=form_ui["output_text"]
             ).then(handlers.navigate_on_success, inputs=form_ui["output_text"], outputs=tabs).then(handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]])
             
         # Schedule Cron Job Tab Events
+        cron_ui["template_dd"].change(partial(handlers.toggle_template_fields, ui.MAX_FIELDS), inputs=cron_ui["template_dd"], outputs=cron_ui["dynamic_outputs"])
         cron_ui["create_btn"].click(
             handlers.handle_schedule_cron,
             inputs=[cron_ui["job_name"], cron_ui["cron_string"], cron_ui["receiver_subscribers"], cron_ui["receiver_custom"], cron_ui["template_dd"], cron_ui["custom_subject"], cron_ui["silent_run_checkbox"]] + cron_ui["all_field_inputs"],
@@ -138,12 +150,13 @@ def main():
         jobs_ui["run_now_btn"].click(handlers.handle_run_job_now, inputs=[jobs_ui["job_id_input"]], outputs=[jobs_ui["cancel_status"]])
 
         # Job Edit Form Events
+        jobs_ui["edit_template_dd"].change(partial(handlers.toggle_template_fields, ui.MAX_FIELDS), inputs=jobs_ui["edit_template_dd"], outputs=jobs_ui["dynamic_outputs"])
         edit_form_outputs_list = [
             jobs_ui["edit_column"], jobs_ui["job_id_input"], jobs_ui["edit_id_state"], jobs_ui["edit_type_state"],
             jobs_ui["edit_template_dd"], jobs_ui["edit_custom_subject"], jobs_ui["edit_cron_group"], jobs_ui["edit_date_group"],
             jobs_ui["edit_cron_name"], jobs_ui["edit_cron_string"], jobs_ui["edit_cron_subscribers"],
             jobs_ui["edit_date_receiver"], jobs_ui["edit_date_send_at"], jobs_ui["edit_silent_run_checkbox"]
-        ] + edit_dynamic_outputs
+        ] + jobs_ui["dynamic_outputs"]
         jobs_ui["dataframe"].select(handlers.on_select_job, inputs=[jobs_ui["dataframe"]], outputs=edit_form_outputs_list)
         jobs_ui["cancel_edit_btn"].click(lambda: gr.update(visible=False), outputs=jobs_ui["edit_column"])
         
@@ -160,6 +173,59 @@ def main():
         ).then(
             lambda: gr.update(visible=False), outputs=jobs_ui["edit_column"]
         )
+
+        llm_refresh_outputs = [llm_ui["dataframe"], llm_ui["status_output"]]
+        llm_ui["tab"].select(handlers.refresh_llm_configs, outputs=llm_refresh_outputs)
+        llm_ui["refresh_btn"].click(handlers.refresh_llm_configs, outputs=llm_refresh_outputs)
+        
+        # 2. 当在表格中选中一行时，填充表单
+        llm_select_outputs = [
+            llm_ui["config_id_state"], 
+            llm_ui["provider_name_input"], 
+            llm_ui["api_url_input"],
+            llm_ui["api_key_input"],
+            llm_ui["model_name_input"]
+        ]
+        llm_ui["dataframe"].select(handlers.on_select_llm_config, inputs=[llm_ui["dataframe"]], outputs=llm_select_outputs, trigger_mode='once')
+        
+        # 3. 清空表单按钮
+        llm_ui["clear_btn"].click(handlers.clear_llm_form_inputs, outputs=llm_select_outputs)
+
+        # 4. 保存按钮（添加或更新）
+        llm_save_inputs = [
+            llm_ui["config_id_state"], 
+            llm_ui["provider_name_input"], 
+            llm_ui["api_url_input"],
+            llm_ui["api_key_input"],
+            llm_ui["model_name_input"]
+        ]
+        llm_ui["save_btn"].click(handlers.handle_save_llm_config, inputs=llm_save_inputs).then(
+            handlers.refresh_llm_configs, outputs=llm_refresh_outputs
+        ).then(
+            handlers.clear_llm_form_inputs, outputs=llm_select_outputs
+        )
+        
+        # 5. 删除按钮
+        llm_ui["delete_btn"].click(
+            handlers.handle_delete_llm_config, 
+            inputs=[llm_ui["config_id_state"]], 
+            outputs=[llm_ui["action_status_output"]],
+            js='_ => confirm("您确定要删除这个配置吗？此操作无法撤销。")'
+        ).then(
+            handlers.refresh_llm_configs, outputs=llm_refresh_outputs
+        ).then(
+             handlers.clear_llm_form_inputs, outputs=llm_select_outputs
+        )
+        
+        # 6. 设为当前服务按钮
+        llm_ui["set_active_btn"].click(
+            handlers.handle_set_active_llm_config,
+            inputs=[llm_ui["config_id_state"]],
+            outputs=[llm_ui["action_status_output"]]
+        ).then(
+            handlers.refresh_llm_configs, outputs=llm_refresh_outputs
+        )
+        # ========================== END: MODIFICATION ============================
 
     # --- 4. Launch the App ---
     print("EMinder 前端控制中心即将启动...")

@@ -54,14 +54,9 @@ import os
 import datetime
 import re
 import glob
-# ========================== START: MODIFICATION (需求 ②) ==========================
-import shutil  # 导入 shutil 用于高级文件操作（移动）
-# ========================== END: MODIFICATION (需求 ②) ============================
-from ..core.config import settings # 导入全局配置
+import shutil
+from ..core.config import settings
 
-# 设计师注：为了实现 Markdown 到 HTML 的转换，我们推荐使用 'Markdown' 库。
-# 请在您的环境中执行 `pip install Markdown` 来安装它。
-# 为了保证即使在未安装此库的情况下程序也能运行，我们提供了一个简单的降级方案。
 try:
     import markdown
     def convert_markdown_to_html(md_text):
@@ -316,7 +311,8 @@ async def _generate_period_summary(period_days: int, period_name: str) -> dict:
 """
     
     # 5. 调用AI并构建邮件
-    ai_result = await llm_service.process_text_with_deepseek(prompt)
+    ai_result = await llm_service.generate_text(prompt)
+    # ========================== END: MODIFICATION ============================
     ai_analysis_html = convert_markdown_to_html(ai_result['content']) if ai_result['success'] else f"<p>AI分析失败: {ai_result['content']}</p>"
 
     subject = f"您的专属{period_name}总结报告 ({start_date.strftime('%Y-%m-%d')} - {(today - datetime.timedelta(days=1)).strftime('%Y-%m-%d')})"
@@ -444,7 +440,7 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
 """
         
         # 3d. 调用AI并构建邮件
-        ai_result = await llm_service.process_text_with_deepseek(prompt)
+        ai_result = await llm_service.generate_text(prompt)
         ai_analysis_html = convert_markdown_to_html(ai_result['content']) if ai_result['success'] else f"<p>AI分析失败: {ai_result['content']}</p>"
 
         subject = f"你的专属每日总结报告 - {today.strftime('%Y-%m-%d')}"
@@ -692,7 +688,9 @@ async def get_script_runner_template(data: dict) -> dict:
     log_for_summary = exec_result.get('stdout') or exec_result.get('stderr')
     if summary_prompt and log_for_summary:
         full_prompt = f"{summary_prompt}\n\n--- 日志开始 ---\n{log_for_summary}\n--- 日志结束 ---"
-        summary_result = await llm_service.process_text_with_deepseek(full_prompt)
+        # ========================== START: MODIFICATION ==========================
+        summary_result = await llm_service.generate_text(full_prompt)
+        # ========================== END: MODIFICATION ============================
         
         summary_html = ""
         if summary_result["success"]:
@@ -755,12 +753,14 @@ async def get_deepseek_workflow_template(data: dict) -> dict:
             "html": "<h4>错误</h4><p>您没有提供任何需要处理的文本内容。</p>"
         }
     
-    # 【异步改造】调用异步的 LLM 服务
-    result = await llm_service.process_text_with_deepseek(text_to_process)
+    # ========================== START: MODIFICATION ==========================
+    # 调用通用的 generate_text 方法
+    result = await llm_service.generate_text(text_to_process)
+    # ========================== END: MODIFICATION ============================
     
     if result["success"]:
         # 处理成功
-        subject = f"DeepSeek 模型处理结果 - {text_to_process[:20]}..."
+        subject = f"AI处理结果 - {text_to_process[:20]}..."
         # 将原始文本和处理结果都包含在邮件中，方便对照
         # 使用 pre 标签保留换行和空格，保证格式
         html_content = f"""
@@ -772,11 +772,10 @@ async def get_deepseek_workflow_template(data: dict) -> dict:
         """
         return {"subject": subject, "html": html_content}
     else:
-        # 处理失败
-        subject = "DeepSeek 大模型工作流执行失败"
+        subject = "大模型工作流执行失败"
         html_content = f"""
             <h4>错误：大模型处理失败</h4>
-            <p>在将您的文本发送给 DeepSeek API 时发生了错误。</p>
+            <p>在将您的文本发送给 API 时发生了错误。</p>
             
             <h4>错误详情:</h4>
             <pre style="white-space: pre-wrap; word-wrap: break-word; background-color: #fbe9e7; color: #b71c1c; padding: 15px; border-radius: 8px;">{result['content']}</pre>
@@ -981,7 +980,7 @@ custom_templates = {
         "meta": local_file_report_meta,
         "func": get_local_file_report_template
     },
-    "deepseek_workflow": {
+    "deepseek_workflow": { # key 保持不变以兼容旧任务
         "meta": deepseek_workflow_meta,
         "func": get_deepseek_workflow_template
     },

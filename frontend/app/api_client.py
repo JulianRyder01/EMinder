@@ -115,4 +115,37 @@ def update_job(job_id, payload):
     response.raise_for_status()
     return response.json()
 
-# ========================== END: MODIFICATION (File Splitting) ============================
+# ========================== START: MODIFICATION ==========================
+# DESIGNER'S NOTE: 新增与 LLM 配置 API 交互的函数
+
+def get_llm_configs():
+    """从后端获取所有LLM配置。"""
+    response = requests.get(config.LLM_CONFIGS_URL)
+    response.raise_for_status()
+    return response.json()
+
+def add_llm_config(payload: dict):
+    """向后端发送请求以添加一个新的LLM配置。"""
+    response = requests.post(config.LLM_CONFIGS_URL, json=payload)
+    response.raise_for_status()
+    return response.json()
+
+def update_llm_config(config_id: int, payload: dict):
+    """向后端发送请求以更新一个已存在的LLM配置。"""
+    response = requests.put(f"{config.LLM_CONFIGS_URL}/{config_id}", json=payload)
+    response.raise_for_status()
+    return response.json()
+
+def delete_llm_config(config_id: int):
+    """向后端发送请求以删除一个LLM配置。"""
+    response = requests.delete(f"{config.LLM_CONFIGS_URL}/{config_id}")
+    response.raise_for_status()
+    return response.json()
+
+def set_active_llm_config(config_id: int):
+    """向后端发送请求以设置一个LLM配置为当前激活的服务。"""
+    response = requests.post(f"{config.LLM_CONFIGS_URL}/active/{config_id}")
+    response.raise_for_status()
+    return response.json()
+
+# ========================== END: MODIFICATION ============================

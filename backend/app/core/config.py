@@ -36,19 +36,16 @@ class Settings:
     # 定时任务配置
     DAILY_SUMMARY_CRON: str = os.getenv("DAILY_SUMMARY_CRON", "0 8 * * *")
 
-    # --- 【新增】大模型工作流配置 ---
-    # 从环境变量中读取 DeepSeek API 的 Key 和 Endpoint
-    # 如果 API Key 未设置，其值为 None
-    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY")
-    DEEPSEEK_API_ENDPOINT: str = os.getenv("DEEPSEEK_API_ENDPOINT", "https://api.deepseek.com")
-
-    # ========================== START: MODIFICATION (需求 ①) ==========================
+    # ========================== START: MODIFICATION ==========================
     # DESIGNER'S NOTE:
+    # 移除 DEEPSEEK_API_KEY 和 DEEPSEEK_API_ENDPOINT 的读取逻辑。
+    # 这些配置将由 llm_service 从数据库动态获取。
+    # ========================== END: MODIFICATION ============================
+
     # 新增对每日总结文件夹路径的读取。
     # 如果用户没有在 .env 文件中配置此项，其值将为 None。
     # 相关的模板函数会处理此情况，并返回友好的错误提示。
     DAILY_SUMMARY_PATH: str = os.getenv("DAILY_SUMMARY_PATH")
-    # ========================== END: MODIFICATION (需求 ①) ============================
 
 
 # 创建一个全局配置实例

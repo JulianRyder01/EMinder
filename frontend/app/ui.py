@@ -39,9 +39,20 @@ def create_subscriber_management_tab():
 
 def create_email_form(is_scheduled: bool):
     """
-    Builds the reusable form for sending or scheduling emails, starting from Step 2.
-    The receiver dropdown is now a shared component managed in main.py.
+    Builds the reusable form for sending or scheduling emails.
     """
+    # ========================== START: MODIFICATION ==========================
+    # DESIGNER'S NOTE:
+    # 修正 KeyError 的核心：将接收者下拉框的创建移入此函数，使其成为表单的一部分。
+    gr.Markdown("### 1. 选择或输入接收者邮箱")
+    with gr.Row():
+        receiver_dd = gr.Dropdown(
+            label="选择或输入接收者",
+            allow_custom_value=True,
+            interactive=True
+        )
+    # ========================== END: MODIFICATION ============================
+
     gr.Markdown("### 2. 选择邮件模板")
     load_status = gr.Markdown()
     template_dd = gr.Dropdown(label="选择邮件模板", choices=["正在加载..."], interactive=False)
@@ -83,11 +94,16 @@ def create_email_form(is_scheduled: bool):
 
     # Collect all dynamic field inputs for the handler
     all_field_inputs = [c for d in dynamic_fields_components for c in (d['text'], d['number'])]
-    
+    dynamic_outputs = [dynamic_form_area, form_description] + [comp for d in dynamic_fields_components for comp in d.values()]
+
     components = {
+        # ========================== START: MODIFICATION ==========================
+        "receiver_dd": receiver_dd, # 将新创建的组件添加到返回字典中
+        # ========================== END: MODIFICATION ============================
         "load_status": load_status, "template_dd": template_dd, "custom_subject": custom_subject,
         "dynamic_form_area": dynamic_form_area, "form_description": form_description,
         "dynamic_fields": dynamic_fields_components, "all_field_inputs": all_field_inputs,
+        "dynamic_outputs": dynamic_outputs, # 统一动态输出
         "attachment_state": attachment_state, "attachment_display": attachment_display,
         "file_uploader": file_uploader, "clear_attachments_btn": clear_attachments_btn,
         "send_at_input": send_at_input, "action_btn": action_btn, "action_type": action_type,
@@ -135,12 +151,13 @@ def create_cron_job_tab():
         output_text = gr.Textbox(label="操作结果", interactive=False)
 
     all_field_inputs = [c for d in dynamic_fields_components for c in (d['text'], d['number'])]
+    dynamic_outputs = [dynamic_form_area, form_description] + [comp for d in dynamic_fields_components for comp in d.values()]
 
     components = {
         "tab": tab, "job_name": job_name, "cron_string": cron_string, "receiver_subscribers": receiver_subscribers,
         "receiver_custom": receiver_custom, "load_status": load_status, "template_dd": template_dd,
         "custom_subject": custom_subject, "dynamic_form_area": dynamic_form_area, "form_description": form_description,
-        "dynamic_fields": dynamic_fields_components, "all_field_inputs": all_field_inputs,
+        "dynamic_fields": dynamic_fields_components, "all_field_inputs": all_field_inputs, "dynamic_outputs": dynamic_outputs,
         "create_btn": create_btn, "output_text": output_text,
 # ========================== START: MODIFICATION (需求 ①) ==========================
         "silent_run_checkbox": silent_run_checkbox
@@ -207,6 +224,7 @@ def create_job_management_tab():
                     update_status = gr.Textbox(label="更新结果", interactive=False)
     
     edit_all_field_inputs = [c for d in edit_dynamic_fields for c in (d['text'], d['number'])]
+    edit_dynamic_outputs = [edit_dynamic_area, edit_form_desc] + [comp for d in edit_dynamic_fields for comp in d.values()]
 
     components = {
         "tab": tab, "refresh_btn": refresh_btn, "status_output": status_output, "dataframe": dataframe,
@@ -217,12 +235,68 @@ def create_job_management_tab():
         "edit_date_group": edit_date_group, "edit_date_receiver": edit_date_receiver, "edit_date_send_at": edit_date_send_at,
         "edit_template_dd": edit_template_dd, "edit_custom_subject": edit_custom_subject,
         "edit_dynamic_area": edit_dynamic_area, "edit_form_desc": edit_form_desc,
-        "edit_dynamic_fields": edit_dynamic_fields, "edit_all_field_inputs": edit_all_field_inputs,
+        "edit_dynamic_fields": edit_dynamic_fields, "edit_all_field_inputs": edit_all_field_inputs, "dynamic_outputs": edit_dynamic_outputs,
         "update_btn": update_btn, "cancel_edit_btn": cancel_edit_btn, "update_status": update_status,
-# ========================== START: MODIFICATION (需求 ①) ==========================
         "edit_silent_run_checkbox": edit_silent_run_checkbox
-# ========================== END: MODIFICATION (需求 ①) ============================
     }
     return components
 
 # ========================== END: MODIFICATION (Logic Simplification) ============================
+
+def create_llm_settings_tab():
+    """构建 "LLM 服务配置" 选项卡的UI界面。"""
+    with gr.TabItem("⚙️ LLM 服务配置", id="llm_settings_tab") as tab:
+        gr.Markdown("## 大模型（LLM）服务配置中心")
+        gr.Markdown("在这里管理用于邮件内容生成、总结等功能的语言模型API。**在任何时候，只有一个服务可以被设为“当前服务”**。")
+        
+        with gr.Row():
+            refresh_btn = gr.Button("🔄 刷新配置列表", variant="secondary")
+        status_output = gr.Markdown()
+        dataframe = gr.DataFrame(
+            headers=["ID", "当前服务", "服务商名称", "API URL", "API Key (末4位)", "模型名称"],
+            interactive=False,
+            row_count=(5, "dynamic")
+        )
+        
+        with gr.Row():
+            with gr.Column(scale=2):
+                with gr.Group():
+                    gr.Markdown("### 🎛️ 操作选中配置")
+                    gr.Markdown("请先在上方表格中**点击选中**一行以进行操作。")
+                    config_id_state = gr.State() # 用于存储选中行的ID
+                    
+                    with gr.Row():
+                        set_active_btn = gr.Button("✅ 设为当前服务", variant="primary")
+                        delete_btn = gr.Button("🗑️ 删除此配置", variant="stop")
+                    
+                    action_status_output = gr.Textbox(label="操作结果", interactive=False)
+
+            with gr.Column(scale=3):
+                with gr.Group():
+                    gr.Markdown("### ✨ 添加新配置 / 编辑选中配置")
+                    provider_name_input = gr.Textbox(label="服务商名称", placeholder="例如：硅基流动 (SiliconFlow)")
+                    api_url_input = gr.Textbox(label="API URL", placeholder="例如：https://api.siliconflow.cn/v1")
+                    api_key_input = gr.Textbox(label="API Key", type="password", placeholder="sk-...  (编辑时留空则不修改)")
+                    model_name_input = gr.Textbox(label="模型名称", placeholder="例如：deepseek-ai/DeepSeek-V3")
+                    
+                    with gr.Row():
+                        save_btn = gr.Button("💾 保存配置", variant="primary")
+                        clear_btn = gr.Button("📋 清空表单")
+
+    components = {
+        "tab": tab,
+        "refresh_btn": refresh_btn,
+        "status_output": status_output,
+        "dataframe": dataframe,
+        "config_id_state": config_id_state,
+        "set_active_btn": set_active_btn,
+        "delete_btn": delete_btn,
+        "action_status_output": action_status_output,
+        "provider_name_input": provider_name_input,
+        "api_url_input": api_url_input,
+        "api_key_input": api_key_input,
+        "model_name_input": model_name_input,
+        "save_btn": save_btn,
+        "clear_btn": clear_btn,
+    }
+    return components

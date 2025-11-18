@@ -1,8 +1,9 @@
 # backend/app/main.py (已修改)
 
 from fastapi import FastAPI
-from .api import subscribers, templates, jobs  # 导入新的 templates 模块
-# ========================== START: 修改区域 (需求 ①) ==========================
+# ========================== START: MODIFICATION ==========================
+from .api import subscribers, templates, jobs, llm # 导入新的 llm 模块
+# ========================== END: MODIFICATION ============================
 import os
 import logging
 from .core.logging_config import setup_logging
@@ -16,8 +17,13 @@ app = FastAPI(
 
 # 挂载 API 路由
 app.include_router(subscribers.router, prefix="/api", tags=["Subscribers"])
-app.include_router(templates.router, prefix="/api", tags=["Templates"]) # 挂载新的模板路由
-app.include_router(jobs.router, prefix="/api", tags=["Scheduled Jobs"]) 
+app.include_router(templates.router, prefix="/api", tags=["Templates"])
+app.include_router(jobs.router, prefix="/api", tags=["Scheduled Jobs"])
+# ========================== START: MODIFICATION ==========================
+# DESIGNER'S NOTE: 挂载新的 LLM 配置管理路由。
+app.include_router(llm.router, prefix="/api/llm", tags=["LLM Settings"])
+# ========================== END: MODIFICATION ============================
+
 
 @app.on_event("startup")
 def startup_event():

@@ -32,7 +32,8 @@ class AppConfig:
             help="Backend server address (default: http://127.0.0.1)"
         )
         
-        args = parser.parse_args()
+        # 使用 parse_known_args 避免 Gradio 在 reload 模式下传入额外参数导致出错
+        args, _ = parser.parse_known_args()
 
         self.run_port = args.port
         backend_base_url = f"{args.bnserver}:{args.bnport}"
@@ -47,6 +48,10 @@ class AppConfig:
         self.SCHEDULE_ONCE_URL = f"{self.API_BASE_URL}/schedule-once"
         self.SCHEDULE_CRON_URL = f"{self.API_BASE_URL}/schedule-cron"
         self.JOBS_URL = f"{self.API_BASE_URL}/jobs"
+        # ========================== START: MODIFICATION ==========================
+        # DESIGNER'S NOTE: 新增LLM配置管理的API端点
+        self.LLM_CONFIGS_URL = f"{self.API_BASE_URL}/llm/configs"
+        # ========================== END: MODIFICATION ============================
 
 # Create a single, globally accessible configuration instance.
 config = AppConfig()
