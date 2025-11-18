@@ -1087,4 +1087,4 @@ with gr.Blocks(theme=gr.themes.Soft(primary_hue="green", secondary_hue="lime"), 
 
 if __name__ == "__main__":
     print("EMinder 前端控制中心即将启动...")
-    demo.launch(server_name="0.0.0.0", server_port=run_port, inbrowser=True)
+    demo.launch(server_name="0.0.0.0", server_port=run_port, inbrowser=False)

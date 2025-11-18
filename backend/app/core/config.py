@@ -42,6 +42,14 @@ class Settings:
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY")
     DEEPSEEK_API_ENDPOINT: str = os.getenv("DEEPSEEK_API_ENDPOINT", "https://api.deepseek.com")
 
+    # ========================== START: MODIFICATION (需求 ①) ==========================
+    # DESIGNER'S NOTE:
+    # 新增对每日总结文件夹路径的读取。
+    # 如果用户没有在 .env 文件中配置此项，其值将为 None。
+    # 相关的模板函数会处理此情况，并返回友好的错误提示。
+    DAILY_SUMMARY_PATH: str = os.getenv("DAILY_SUMMARY_PATH")
+    # ========================== END: MODIFICATION (需求 ①) ============================
+
 
 # 创建一个全局配置实例
 settings = Settings()
