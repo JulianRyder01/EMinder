@@ -1,4 +1,4 @@
-# backend/app/api/llm.py (新文件)
+# backend/app/api/llm.py
 
 from fastapi import APIRouter, HTTPException, Body, Path
 from typing import Dict, Any, List
@@ -51,7 +51,7 @@ def update_llm_configuration(config_id: int = Path(...), payload: Dict[str, Any]
     try:
         provider_name = payload.get("provider_name")
         api_url = payload.get("api_url")
-        api_key = payload.get("api_key")  # 可以为空，表示不更新密钥
+        api_key = payload.get("api_key")  # 可以为空或None，表示不更新密钥
         model_name = payload.get("model_name")
 
         if not all([provider_name, api_url, model_name]):

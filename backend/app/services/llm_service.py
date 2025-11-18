@@ -34,7 +34,7 @@ class LLMService:
             self.logger.warning("LLM调用失败：数据库中没有设置任何激活的大模型服务。")
             return {
                 "success": False,
-                "content": "无法连接到大模型服务：管理员尚未在设置页面中指定一个当前服务。"
+                "content": "无法连接到大模型服务：管理员尚未在“LLM 服务配置”页面中指定一个当前服务。"
             }
 
         api_url = active_config.get("api_url")
@@ -50,7 +50,7 @@ class LLMService:
             }
 
         # 2. 准备请求（兼容OpenAI的格式）
-        #    适用于 DeepSeek, SiliconFlow 等绝大多数厂商
+        #    适用于 DeepSeek, SiliconFlow, Kimi 等绝大多数厂商
         full_endpoint = f"{api_url.rstrip('/')}/chat/completions"
         headers = {
             "Content-Type": "application/json",

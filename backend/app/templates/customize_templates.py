@@ -28,14 +28,14 @@
  2. 编写模板生成函数 (Template Function):
     - 每个模板都需要一个函数，用来接收用户在前端填写的数据，并生成最终的邮件 HTML 内容。
     - 函数必须接收一个名为 `data` 的字典作为参数。
-    - 【重要】函数必须返回一个符合开发规范的字典。详情请参阅 `CUSTOM_TEMPLATE_GUIDE.md`。
+    - 【重要】函数必须返回一个符合开发规范的字典。
       - 必须包含 `subject` (邮件主题) 和 `html` (邮件内容)。
       - 可选包含 `attachments` (文件附件路径列表) 和 `embedded_images` (内嵌图片信息列表)。
     - 【异步注意】: 如果你的模板函数需要执行 I/O 操作 (如 API 请求、运行脚本)，请将其定义为 `async def`。
 
  3. 注册你的模板:
     - 将你创建的元数据字典和模板生成函数组合在一起，形成一个完整的模板信息。
-    - 将这个模板信息添加到一个名为 `custom_templates` 的字典中，key 为模板的唯一标识符 (通常是元数据中 `name` 的蛇形命名法)。
+    - 将这个模板信息添加到一个名为 `custom_templates` 的字典中，key 为模板的唯一标识符。
 
  4. 启用模板:
     - **最重要的一步**: 前往 `email_templates.py` 文件。
@@ -56,6 +56,8 @@ import re
 import glob
 import shutil
 from ..core.config import settings
+from ..services.llm_service import llm_service
+from ..services.script_runner_service import script_runner_service
 
 try:
     import markdown
@@ -223,14 +225,12 @@ def _parse_daily_summary(content: str) -> dict:
         "progress": round(progress)
     }
 
-async def _generate_period_summary(period_days: int, period_name: str) -> dict:
+async def _generate_period_summary(period_days: int, period_name: str, data: dict) -> dict:
     """
-    一个通用的函数，用于生成周度或月度总结报告。
-    :param period_days: 7 for weekly, 30 for monthly.
-    :param period_name: "周度" or "月度".
-    :return: A dictionary for the email template.
+    通用函数，用于生成周度或月度总结报告。
     """
-    # 1. 检查并获取路径
+    system_prompt = data.get("system_prompt", "你是一位专业的个人成长教练和数据分析师。")
+
     if not settings.DAILY_SUMMARY_PATH:
         return {
             "subject": f"配置错误：无法生成{period_name}总结",
@@ -266,46 +266,50 @@ async def _generate_period_summary(period_days: int, period_name: str) -> dict:
             "html": f"<h4>无数据</h4><p>在过去 {period_days} 天内没有找到任何有效的每日总结历史记录。</p>"
         }
 
-    # 3. 读取并聚合数据
-    relevant_files.sort() # 按日期排序
-    total_done_tasks = 0
+    relevant_files.sort()
+    all_done_tasks, all_todo_tasks, all_notes = [], [], []
     total_tasks_count = 0
     progress_per_day = []
     
     for file_date, filepath in relevant_files:
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
-            parsed_data = _parse_daily_summary(content)
-            total_done_tasks += len(parsed_data["done"])
-            total_tasks_count += parsed_data["total"]
-            progress_per_day.append({
-                "date": file_date.strftime("%m-%d"),
-                "progress": parsed_data["progress"]
-            })
+            parsed = _parse_daily_summary(content)
+            all_done_tasks.extend(parsed["done"])
+            all_todo_tasks.extend(parsed["todo"])
+            all_notes.extend(parsed["notes"])
+            total_tasks_count += parsed["total"]
+            progress_per_day.append({"date": file_date.strftime("%m-%d"), "progress": parsed["progress"]})
     
-    overall_progress = (total_done_tasks / total_tasks_count * 100) if total_tasks_count > 0 else 0
+    overall_progress = (len(all_done_tasks) / total_tasks_count * 100) if total_tasks_count > 0 else 0
 
     # 4. 构建AI Prompt
     progress_str = ", ".join([f"{p['date']}: {p['progress']}%" for p in progress_per_day])
+    done_tasks_str = "; ".join(all_done_tasks)
+    todo_tasks_str = "; ".join(all_todo_tasks)
+    notes_str = "; ".join(all_notes)
+
     prompt = f"""
-请你扮演一位专业的个人成长教练和数据分析师。我将为你提供过去{period_days}天内我的每日任务完成情况数据。请你基于这些数据，为我生成一份详细的{period_name}总结报告。
+{system_prompt}
+我将为你提供我过去{period_days}天的每日任务完成情况数据。请你基于这些数据，为我生成一份详细的{period_name}总结报告。
 
 报告需要包含以下几个部分：
-1.  **数据概览**: 清晰地总结核心数据指标。
+1.  **数据概览**: 总结核心数据指标。
 2.  **多维度分析**:
-    *   **一致性分析**: 我是否每天都在坚持？是否有中断？
-    *   **效率趋势**: 我的完成率是上升、下降还是保持平稳？
-    *   **优点识别**: 根据数据，我做得好的地方是什么？
-    *   **潜在问题**: 是否有迹象表明我可能在某些方面遇到了困难？
-3.  **鼓励与建议**: 给出具体、可执行的建议，并用积极、激励人心的语气鼓励我继续前进。
+    *   **一致性与趋势**: 我的坚持情况如何？效率是上升还是下降？
+    *   **亮点与成就**: 我做得好的地方是什么？完成了哪些值得称赞的任务？
+    *   **挑战与反思**: 从未完成的任务和随手记中，是否能发现我遇到的困难或反复出现的主题？
+3.  **鼓励与建议**: 给出具体、可执行的建议，并用你设定的角色语气鼓励我。
 
 **输入数据:**
 - **时间范围**: 过去 {period_days} 天
 - **总计划任务数**: {total_tasks_count}
-- **总完成任务数**: {total_done_tasks}
+- **总完成任务数**: {len(all_done_tasks)}
 - **总体完成率**: {overall_progress:.1f}%
-- **每日进度列表 (日期: 完成率)**: {progress_str}
-- **有效总结天数**: {len(relevant_files)} / {period_days}
+- **每日进度列表**: {progress_str}
+- **完成的任务摘要**: {done_tasks_str or '无'}
+- **遗留的任务摘要**: {todo_tasks_str or '无'}
+- **随手记摘要**: {notes_str or '无'}
 
 请直接生成Markdown格式的报告正文，无需客套话。
 """
@@ -322,7 +326,7 @@ async def _generate_period_summary(period_days: int, period_name: str) -> dict:
             <li><strong>时间范围:</strong> {start_date.strftime('%Y-%m-%d')} 至 {(today - datetime.timedelta(days=1)).strftime('%Y-%m-%d')}</li>
             <li><strong>有效天数:</strong> {len(relevant_files)} / {period_days} 天</li>
             <li><strong>总计划任务:</strong> {total_tasks_count} 项</li>
-            <li><strong>总完成任务:</strong> {total_done_tasks} 项</li>
+            <li><strong>总完成任务:</strong> {len(all_done_tasks)} 项</li>
             <li><strong>总体完成率:</strong> <span style="font-size: 18px; color: #4CAF50; font-weight: bold;">{overall_progress:.1f}%</span></li>
         </ul>
         <h4>AI智能分析与建议</h4>
@@ -336,18 +340,19 @@ async def _generate_period_summary(period_days: int, period_name: str) -> dict:
 # --- 步骤 1: 【新模板】每日总结与明日计划 ---
 daily_summary_plan_meta = {
     "display_name": "每日总结与明日计划 (自动)",
-    "description": "自动读取指定本地文件夹中的当日Markdown文件，进行总结和AI分析，然后发送报告邮件，并存档。",
-    "fields": [] # 这是一个全自动模板，不需要用户在UI上填写任何字段。
+    "description": "智能工作流：首次运行初始化当天计划（自动迁移昨日计划），后续运行则进行总结、分析和归档。",
+    "fields": [
+        {
+            "name": "system_prompt",
+            "label": "AI角色提示词 (System Prompt)",
+            "type": "textarea",
+            "default": "你是一位充满活力和鼓励精神的私人助理。你的任务是根据我今天的数据，用亲切自然的语气为我总结，并给予我激励。"
+        }
+    ]
 }
 
-# ========================== START: MODIFICATION (需求 ②) ==========================
 async def generate_daily_summary_plan_template(data: dict) -> dict:
-    """
-    (已重构) 实现每日总结与明日计划的核心逻辑。
-    - 首次运行: 初始化今日文件，并迁移昨日计划。
-    - 后续运行: 总结今日进度，并备份，但不删除源文件。
-    """
-    # 1. 检查路径配置
+    system_prompt = data.get("system_prompt", "你是一位充满活力的私人助理。")
     if not settings.DAILY_SUMMARY_PATH:
         return {
             "subject": "配置错误：无法执行每日总结",
@@ -361,16 +366,11 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
     # 2. 准备路径并查找昨天的计划 (核心新增逻辑)
     today = datetime.date.today()
     yesterday = today - datetime.timedelta(days=1)
-    
-    today_filename = f"{today.strftime('%Y-%m-%d')}.md"
-    yesterday_filename = f"{yesterday.strftime('%Y-%m-%d')}.md"
-    
-    today_filepath = os.path.join(base_path, today_filename)
-    yesterday_filepath = os.path.join(base_path, yesterday_filename)
+    today_filepath = os.path.join(base_path, f"{today.strftime('%Y-%m-%d')}.md")
+    yesterday_filepath = os.path.join(base_path, f"{yesterday.strftime('%Y-%m-%d')}.md")
 
-    # 2. 判断是首次运行还是后续运行
     if not os.path.exists(today_filepath):
-        # --- 场景A: 当天首次运行 ---
+        # 场景A: 当天首次运行 - 初始化
         yesterdays_plan = []
         
         # 2a. 查找并处理昨日文件
@@ -381,12 +381,7 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
                 
                 # 从昨日文件中提取“明日计划”
                 yesterdays_plan = _parse_daily_summary(y_content).get("plan", [])
-                
-                # 归档昨日文件
-                archive_path = os.path.join(history_path, yesterday_filename)
-                shutil.move(yesterday_filepath, archive_path) # 使用 move 实现归档并删除
-                print(f"成功归档昨日文件到: {archive_path}")
-
+                shutil.move(yesterday_filepath, os.path.join(history_path, f"{yesterday.strftime('%Y-%m-%d')}.md"))
             except Exception as e:
                 print(f"处理昨日文件 {yesterday_filepath} 时出错: {e}")
         
@@ -395,17 +390,11 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
         
         # 2c. 发送初始化邮件
         email_html = f"<h4>今日总结已初始化！</h4><p>系统已为您创建了今天的模板文件：</p><p><code>{today_filepath}</code></p>"
-        if yesterdays_plan:
-            email_html += "<p>并已将您昨天的“明日计划”自动迁移为今天的待办事项。请开始新的一天吧！</p>"
-        else:
-            email_html += "<p>请立即填写今日的计划与总结吧！</p>"
-            
-        return { "subject": f"✅ {today.strftime('%Y-%m-%d')} 新的一天，计划已就绪！", "html": email_html }
+        email_html += "<p>并已将您昨天的“明日计划”自动迁移为今天的待办事项。请开始新的一天吧！</p>" if yesterdays_plan else "<p>请立即填写今日的计划与总结吧！</p>"
+        return {"subject": f"✅ {today.strftime('%Y-%m-%d')} 新的一天，计划已就绪！", "html": email_html}
             
     else:
-        # --- 场景B: 当天后续运行 ---
-        
-        # 3a. 读取并解析今天的现有文件
+        # 场景B: 当天后续运行 - 总结
         with open(today_filepath, 'r', encoding='utf-8') as f:
             content = f.read()
         
@@ -421,7 +410,8 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
             
         # 3c. 构建AI Prompt
         prompt = f"""
-请你扮演我的私人助理，以积极、鼓励的语气，为我生成一份今日的总结报告。
+{system_prompt}
+请为我生成一份今日的总结报告。
 
 **我的今日数据:**
 - **已完成事项**: {', '.join(parsed_data['done']) if parsed_data['done'] else '无'}
@@ -433,8 +423,8 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
 **你的任务:**
 1.  **总结表现**: 简要总结我今天的表现。
 2.  **给予鼓励**: 针对我的完成情况（无论好坏）给予具体、真诚的鼓励。
-3.  **提出建议**: 如果有未完成的事项，可以温和地提醒。如果对明日计划有建议，也可以提出来。
-4.  **结尾祝福**: 最后用一句激励人心的话结尾。
+3.  **关联分析**: 结合“随手记”和“未完成事项”，看看是否能发现一些潜在的关联或问题，并提出。
+4.  **结尾祝福**: 最后用一句符合你角色设定的话结尾。
 
 请直接生成报告正文，使用Markdown格式，语言亲切自然。
 """
@@ -467,31 +457,41 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
         """
         
         return {"subject": subject, "html": html_content}
-# ========================== END: MODIFICATION (需求 ②) ============================
 
-
-# --- 步骤 2: 【新模板】周度总结与计划 ---
+# --- 模板 2 & 3: 周/月度总结报告 (自动) ---
 weekly_summary_plan_meta = {
     "display_name": "周度总结报告 (自动)",
-    "description": "自动读取过去7天的每日总结历史，进行聚合分析，并通过AI生成周报。",
-    "fields": []
+    "description": "自动聚合过去7天的每日总结历史，通过AI生成深度分析周报。",
+    "fields": [
+        {
+            "name": "system_prompt",
+            "label": "AI角色提示词 (System Prompt)",
+            "type": "textarea",
+            "default": "你是一位专业的个人成长教练和数据分析师。你的语气专业、富有洞察力且积极。你的目标是帮助我复盘过去，更好地规划未来。"
+        }
+    ]
 }
 
-async def generate_weekly_summary_plan_template(data: dict) -> dict:
-    """生成周度总结报告。"""
-    return await _generate_period_summary(period_days=7, period_name="周度")
-
-
-# --- 步骤 3: 【新模板】月度总结与计划 ---
 monthly_summary_plan_meta = {
     "display_name": "月度总结报告 (自动)",
-    "description": "自动读取过去30天的每日总结历史，进行聚合分析，并通过AI生成月报。",
-    "fields": []
+    "description": "自动聚合过去30天的每日总结历史，通过AI生成深度分析月报。",
+    "fields": [
+        {
+            "name": "system_prompt",
+            "label": "AI角色提示词 (System Prompt)",
+            "type": "textarea",
+            "default": "你是一位富有远见的战略顾问和生活导师。你的分析应更侧重于长期趋势、模式识别和深层动机的挖掘。你的语气应沉稳、睿智且鼓舞人心。"
+        }
+    ]
 }
+
+
+async def generate_weekly_summary_plan_template(data: dict) -> dict:
+    return await _generate_period_summary(7, "周度", data)
 
 async def generate_monthly_summary_plan_template(data: dict) -> dict:
     """生成月度总结报告。"""
-    return await _generate_period_summary(period_days=30, period_name="月度")
+    return await _generate_period_summary(30, "月度", data)
 
 # ===================================================================================
 # END OF MODIFICATION

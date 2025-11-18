@@ -81,36 +81,6 @@ class SQLiteStore:
                 """)
                 logger.info("数据库表 'llm_configs' 初始化或验证成功。")
 
-                # DESIGNER'S NOTE:
-                # 首次运行时，自动预置默认的大模型配置，提升用户体验。
-                cursor.execute("SELECT COUNT(*) FROM llm_configs")
-                if cursor.fetchone()[0] == 0:
-                    logger.info("`llm_configs` 表为空，正在预置默认配置...")
-                    # 1. 添加原有的 DeepSeek 配置 (API Key 来自旧 .env 文件)
-                    cursor.execute("""
-                        INSERT INTO llm_configs (provider_name, api_url, api_key, model_name, is_active)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (
-                        "DeepSeek (官方)",
-                        "https://api.deepseek.com",
-                        "sk-856d71d98b1148928bc790eeae33bc29",
-                        "deepseek-chat",
-                        0 # 默认不激活
-                    ))
-                    # 2. 添加您指定的 硅基流动 (SiliconFlow) 配置
-                    cursor.execute("""
-                        INSERT INTO llm_configs (provider_name, api_url, api_key, model_name, is_active)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (
-                        "硅基流动 (SiliconFlow)",
-                        "https://api.siliconflow.cn/v1",
-                        "sk-vkitdmpjjnttquxeuefumzbzqkuvgjkzbshzgzpzwvyyydma",
-                        "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
-                        1 # 默认激活此项
-                    ))
-                    logger.info("成功预置 'DeepSeek' 和 'SiliconFlow' 的配置。")
-                # ========================== END: MODIFICATION ============================
-
                 conn.commit()
             finally:
                 conn.close()
@@ -204,7 +174,7 @@ class SQLiteStore:
             configs = []
             for row in rows:
                 config = dict(row)
-                config['api_key'] = f"***{config['api_key'][-4:]}" if config['api_key'] else ""
+                config['api_key'] = f"***{config['api_key'][-4:]}" if config['api_key'] and len(config['api_key']) > 4 else "***"
                 configs.append(config)
             return configs
         finally:
@@ -226,7 +196,7 @@ class SQLiteStore:
                 conn.close()
 
     def update_llm_config(self, config_id: int, provider_name: str, api_url: str, api_key: str, model_name: str) -> bool:
-        """更新一个已存在的LLM配置。如果api_key为空字符串，则不更新它。"""
+        """更新一个已存在的LLM配置。如果api_key为空字符串或None，则不更新它。"""
         with lock:
             conn = self._get_connection()
             cursor = conn.cursor()
