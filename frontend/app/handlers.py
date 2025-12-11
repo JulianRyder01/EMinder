@@ -92,12 +92,27 @@ def refresh_subscribers_list():
         df = pd.DataFrame(subs, columns=["email", "remark_name"]).rename(columns={"email": "邮箱地址", "remark_name": "备注名"}) if subs else pd.DataFrame(columns=["邮箱地址", "备注名"])
         msg = f"✅ 订阅列表已于 {datetime.datetime.now().strftime('%H:%M:%S')} 刷新。"
         
-        # Returns updates for: dataframe, status message, manual send dropdown, cron job checkboxes, job edit dropdown
-        return df, msg, gr.update(choices=state.SUBSCRIBER_CHOICES, value=None), gr.update(choices=state.SUBSCRIBER_CHOICES, value=None), gr.update(choices=state.SUBSCRIBER_CHOICES, value=None)
+        # 统一的组件更新对象 (更新选项列表，但不强制重置当前选中的值，以免用户正在操作时被打断)
+        # 注意: 对于 value=None，如果希望刷新时保留用户已选值，可以去掉 value=None，但这里为了确保选项一致性，通常重置或仅更新choices。
+        # 这里我们使用 gr.update(choices=..., value=None) 来确保没有无效选项残留。
+        comp_update = gr.update(choices=state.SUBSCRIBER_CHOICES, value=None)
+
+        # 必须返回 6 个值，对应 main.py 中的 outputs 列表:
+        # 1. sub_ui["dataframe"]
+        # 2. sub_ui["status_output"]
+        # 3. shared_receiver_dd (手动/单次发送)
+        # 4. cron_ui["receiver_subscribers"] (创建周期任务)
+        # 5. jobs_ui["edit_date_receiver"] (编辑单次任务)
+        # 6. jobs_ui["edit_cron_subscribers"] (编辑周期任务) <--- 修复点：添加此项
+        return df, msg, comp_update, comp_update, comp_update, comp_update
+
     except requests.RequestException as e:
         msg = f"🔴 获取订阅列表失败: {e}"
         gr.Warning(msg)
-        return pd.DataFrame(columns=["邮箱地址", "备注名"]), msg, gr.update(choices=[], value=None), gr.update(choices=[], value=None), gr.update(choices=[], value=None)
+        empty_df = pd.DataFrame(columns=["邮箱地址", "备注名"])
+        empty_update = gr.update(choices=[], value=None)
+        # 异常路径同样需要返回 6 个值
+        return empty_df, msg, empty_update, empty_update, empty_update, empty_update
 
 def handle_add_subscriber(email, remark_name):
     """Callback for adding or updating a subscriber."""

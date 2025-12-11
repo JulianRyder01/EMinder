@@ -3,16 +3,25 @@ import aiosmtplib # 导入异步 SMTP 库
 import ssl
 import os
 import random
-import os # <-- 修改点：新增导入 os 模块
+# ========================== START: MODIFICATION (Requirement: Logging) ==========================
+# DESIGNER'S NOTE: 
+# 引入 logging 模块，将邮件发送的关键操作记录到日志文件中，而不是仅仅打印到控制台。
+# 这满足了“要在log里记录发送任务的发送情况”的需求。
+import logging 
+# ========================== END: MODIFICATION (Requirement: Logging) ============================
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.mime.application import MIMEApplication # <-- 修改点：新增导入 MIMEApplication
+from email.mime.application import MIMEApplication 
 # ========================== START: MODIFICATION (Requirement ③) ==========================
 # DESIGNER'S NOTE:
 # 导入 MIMEImage 模块，这是处理邮件内嵌图片所必需的。
 from email.mime.image import MIMEImage
 # ========================== END: MODIFICATION (Requirement ③) ============================
 from ..core.config import settings
+
+# ========================== START: MODIFICATION (Requirement: Logging) ==========================
+logger = logging.getLogger(__name__)
+# ========================== END: MODIFICATION (Requirement: Logging) ============================
 
 class EmailService:
     """处理所有邮件发送的业务逻辑"""
@@ -22,7 +31,10 @@ class EmailService:
         self.smtp_server = settings.SMTP_SERVER
         self.smtp_port = settings.SMTP_PORT
         if not self.accounts:
-            raise ValueError("没有可用的发信邮箱账户，请检查 .env 文件！")
+            # 使用 logger 记录严重的配置错误
+            error_msg = "没有可用的发信邮箱账户，请检查 .env 文件！"
+            logger.critical(error_msg)
+            raise ValueError(error_msg)
 
     def _get_random_account(self) -> dict:
         """从账户池中随机选择一个账户用于发送，实现发信源轮换"""
@@ -77,11 +89,11 @@ class EmailService:
                 img_path = img_data.get("path")
                 img_cid = img_data.get("cid")
                 if not all([img_path, img_cid]):
-                    print(f"警告: 无效的内嵌图片数据，已跳过: {img_data}")
+                    logger.warning(f"邮件构建警告: 无效的内嵌图片数据，已跳过: {img_data}")
                     continue
                 
                 if not os.path.exists(img_path):
-                    print(f"警告: 内嵌图片文件未找到，已跳过: {img_path}")
+                    logger.warning(f"邮件构建警告: 内嵌图片文件未找到，已跳过: {img_path}")
                     continue
                     
                 try:
@@ -99,9 +111,9 @@ class EmailService:
                     # ========================== END: MODIFICATION (Fix Image Embedding) ============================
                     
                     msg_related.attach(img_part)
-                    print(f"成功将图片 {img_path} 关联到邮件正文。")
+                    logger.debug(f"成功将图片 {img_path} 关联到邮件正文。")
                 except Exception as e:
-                    print(f"错误: 关联图片 {img_path} 时失败: {e}")
+                    logger.error(f"邮件构建错误: 关联图片 {img_path} 时失败: {e}")
 
         # 步骤 3: 将包含 HTML 和图片的 'related' 容器作为一个整体，附加到最外层的 'mixed' 容器中
         message.attach(msg_related)
@@ -110,7 +122,7 @@ class EmailService:
         if attachments:
             for file_path in attachments:
                 if not os.path.exists(file_path) or not os.path.isfile(file_path):
-                    print(f"警告: 附件文件未找到，已跳过: {file_path}")
+                    logger.warning(f"邮件构建警告: 附件文件未找到，已跳过: {file_path}")
                     continue
                 
                 try:
@@ -120,9 +132,9 @@ class EmailService:
                     # 添加必要的头信息
                     part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
                     message.attach(part)
-                    print(f"成功附加文件: {file_path}")
+                    logger.debug(f"成功附加文件: {file_path}")
                 except Exception as e:
-                    print(f"错误: 附加文件 {file_path} 时失败: {e}")
+                    logger.error(f"邮件构建错误: 附加文件 {file_path} 时失败: {e}")
 
         try:
             # aiosmtplib 使用与 smtplib 类似的参数，use_tls=True 对应 SMTP_SSL
@@ -135,22 +147,23 @@ class EmailService:
                 use_tls=True, # 启用 SSL
             )
             # 如果代码执行到这里，说明邮件已成功发送
-            print(f"邮件已通过 [{sender_email}] 成功发送至 [{receiver_email}]")
+            # 使用 logger 记录成功信息
+            logger.info(f"邮件发送成功：源 [{sender_email}] -> 目标 [{receiver_email}] | 主题: {subject}")
             return True
             
         except aiosmtplib.SMTPAuthenticationError:
-            print(f"邮件发送失败：发信源 [{sender_email}] 认证失败！请检查邮箱和授权码。")
+            logger.error(f"邮件发送失败：发信源 [{sender_email}] 认证失败！请检查邮箱和授权码。")
             return False
         except aiosmtplib.SMTPServerDisconnected:
             # 【核心修正逻辑】
             # aiosmtplib 中，服务器在发送后立即关闭连接会引发 SMTPServerDisconnected 错误。
             # 这与原代码中处理 (-1, b'\x00\x00\x00') 元组的逻辑目的一致。
             # 我们在此将其视为成功发送，并打印警告。
-            print(f"邮件已通过 [{sender_email}] 成功发送至 [{receiver_email}]。(服务器提前关闭连接，可安全忽略)")
+            logger.warning(f"邮件发送疑似成功 (服务器提前断开)：源 [{sender_email}] -> 目标 [{receiver_email}]。")
             return True
         except Exception as e:
             # 对于所有其他未知的、真正的错误，仍然报告失败
-            print(f"邮件发送失败，发信源 [{sender_email}] -> [{receiver_email}]。错误: {e}")
+            logger.error(f"邮件发送异常：源 [{sender_email}] -> 目标 [{receiver_email}]。错误详情: {e}", exc_info=True)
             return False
     # ========================== END: 修改区域 (需求 ①) ============================
 

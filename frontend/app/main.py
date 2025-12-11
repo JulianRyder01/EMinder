@@ -73,7 +73,8 @@ def main():
             sub_ui["dataframe"], sub_ui["status_output"], 
             shared_receiver_dd,             
             cron_ui["receiver_subscribers"],
-            jobs_ui["edit_date_receiver"]
+            jobs_ui["edit_date_receiver"],
+            jobs_ui["edit_cron_subscribers"] # <--- ADDED: This is the fix for the broken component in Edit Job tab
         ]
         
         # 在应用加载时也执行一次订阅者刷新
