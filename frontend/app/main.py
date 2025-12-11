@@ -57,7 +57,7 @@ def main():
 
         # --- 3. Wire Event Handlers ---
 
-        # App Load Events
+        # --- Wire Event Handlers ---
         demo.load(handlers.check_backend_status, outputs=backend_status)
         
         # ========================== START: CORRECTION (Omission Fix) ==========================
@@ -161,7 +161,12 @@ def main():
 
         # Job Edit Form Events
         edit_form_outputs_list = [
-            jobs_ui["edit_column"], jobs_ui["job_id_input"], jobs_ui["edit_id_state"], jobs_ui["edit_type_state"],
+            jobs_ui["edit_column"], jobs_ui["job_id_input"], 
+            
+            # Wired the 2 new row visibility updates here
+            jobs_ui["default_action_row"], jobs_ui["confirm_action_row"],
+
+            jobs_ui["edit_id_state"], jobs_ui["edit_type_state"],
             jobs_ui["edit_template_dd"], jobs_ui["edit_custom_subject"], jobs_ui["edit_cron_group"], jobs_ui["edit_date_group"],
             jobs_ui["edit_cron_name"], jobs_ui["edit_cron_string"], jobs_ui["edit_cron_subscribers"],
             jobs_ui["edit_date_receiver"], jobs_ui["edit_date_send_at"], jobs_ui["edit_silent_run_checkbox"]

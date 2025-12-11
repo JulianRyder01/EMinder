@@ -410,16 +410,15 @@ def toggle_template_fields(max_fields, choice):
                 updates[base_idx + 2] = gr.update(visible=False) # Hide Number
     return updates
 
+# ========================== START: MODIFICATION (Fix Select Update & Reset UI) ==========================
+# DESIGNER'S NOTE:
+# 1. 增加了2个固定返回值：default_action_row (Visible=True) 和 confirm_action_row (Visible=False)。
+#    这确保了每次选择新任务时，删除确认状态都会被重置。
+# 2. 总返回值数量现在是：16 + 2 + 30 = 48 个。
 def on_select_job(df_input: pd.DataFrame, evt: gr.SelectData):
-    """
-    Callback for when a row is selected in the jobs dataframe.
-    Populates the edit form.
-    CRITICAL FIX: 
-    1. Returns explicit list to avoid dictionary ordering issues.
-    2. Uses gr.Info to give user immediate feedback that selection worked.
-    """
-    # Total outputs = 14 fixed fields + 2 dynamic areas + (10 * 3 fields) = 46 items
-    TOTAL_EDIT_OUTPUTS = 14 + 2 + (10 * 3)
+    # Total outputs: 
+    # 14 fixed fields (inputs/states) + 2 Button Rows + 2 Dynamic Areas + 30 Fields = 48
+    TOTAL_EDIT_OUTPUTS = 14 + 2 + 2 + (10 * 3)
     
     if df_input.empty or evt.index is None:
         return [gr.update()] * TOTAL_EDIT_OUTPUTS
@@ -451,15 +450,15 @@ def on_select_job(df_input: pd.DataFrame, evt: gr.SelectData):
         cron_subscribers_val = find_selections_from_emails(job.get("receiver_emails", [])) if is_cron else []
         date_receiver_val = find_selection_from_email(job.get("receiver_email", "")) if is_date else None
 
-        # Build fixed updates list explicitly matching main.py order:
-        # [edit_column, job_id_input, edit_id_state, edit_type_state, 
-        #  edit_template_dd, edit_custom_subject, edit_cron_group, edit_date_group,
-        #  edit_cron_name, edit_cron_string, edit_cron_subscribers,
-        #  edit_date_receiver, edit_date_send_at, edit_silent_run_checkbox]
-        
         fixed_updates = [
             gr.update(visible=True), # edit_column
             job_id,                  # job_id_input
+            
+            # --- CRITICAL FIX: Reset Cancel UI ---
+            gr.update(visible=True),  # default_action_row (Show Normal Buttons)
+            gr.update(visible=False), # confirm_action_row (Hide Confirm Buttons)
+            # -------------------------------------
+
             job_id,                  # edit_id_state
             job["trigger_type"],     # edit_type_state
             gr.update(value=get_display_name_from_template_key(template_key)), # edit_template_dd
