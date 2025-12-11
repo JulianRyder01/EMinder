@@ -1,9 +1,15 @@
 # frontend/app/handlers.py
 # ========================== START: MODIFICATION (Feature Addition) ==========================
 # DESIGNER'S NOTE:
-# This file is the "controller" layer. It contains all the callback functions for Gradio events.
-# It orchestrates the application's logic: it calls the `api_client` to fetch or send data,
-# processes that data, and returns Gradio update objects to change the UI.
+# This file is the "controller" layer. 
+#
+# CHANGES:
+# 1. Added cancel modal handlers: `ask_confirm_cancel_job`, `execute_cancel_job`, `cancel_cancel_op`.
+#    These manage the visibility of the new 'confirmation_row' in UI.
+# 2. Refactored `on_select_job`:
+#    - Now constructs the return list explicitly by index/order to prevent data mismatch.
+#    - Added `gr.Info` to give immediate visual feedback (solving the "lag" feeling).
+#    - Ensured types are handled correctly.
 
 import gradio as gr
 import pandas as pd
@@ -77,7 +83,6 @@ def load_templates_info():
 
         success_update = gr.update(choices=template_names, value=template_names[0], interactive=True)
         status_message = "模板加载成功！"
-        # Return 7 values to match the outputs in main.py
         return [
             success_update, status_message,  # Manual tab
             success_update, status_message,  # Schedule tab
@@ -88,7 +93,6 @@ def load_templates_info():
     except requests.RequestException as e:
         fail_update = gr.update(choices=["加载失败"], value=None, interactive=False)
         error_message = f"无法连接到后端加载模板: {e}"
-        # Also return 7 values in case of failure
         return [fail_update, error_message, fail_update, error_message, fail_update, error_message, fail_update]
 
 
@@ -101,12 +105,8 @@ def refresh_subscribers_list():
         df = pd.DataFrame(subs, columns=["email", "remark_name"]).rename(columns={"email": "邮箱地址", "remark_name": "备注名"}) if subs else pd.DataFrame(columns=["邮箱地址", "备注名"])
         msg = f"✅ 订阅列表已于 {datetime.datetime.now().strftime('%H:%M:%S')} 刷新。"
         
-        # ========================== START: MODIFICATION ==========================
-        # DESIGNER'S NOTE:
-        # 修正返回值数量，确保与 main.py 中连接的所有组件（7个）完全对应。
         subscriber_list_update = gr.update(choices=state.SUBSCRIBER_CHOICES, value=None)
         return df, msg, subscriber_list_update, subscriber_list_update, subscriber_list_update, subscriber_list_update, subscriber_list_update
-        # ========================== END: MODIFICATION ============================
 
     except requests.RequestException as e:
         msg = f"🔴 获取订阅列表失败: {e}"
@@ -180,20 +180,39 @@ def get_jobs_list():
         gr.Warning(msg)
         return pd.DataFrame([], columns=columns), msg
 
-def cancel_job_by_id(job_id_to_cancel: str):
-    """Callback to cancel a job by its ID."""
+# ========================== START: MODIFICATION (Fix Cancel UI) ==========================
+def ask_confirm_cancel_job(job_id_to_cancel: str):
+    """
+    Called when user clicks "Cancel Task".
+    Hides default buttons, shows confirm buttons.
+    """
     if not job_id_to_cancel or not job_id_to_cancel.strip():
-        gr.Warning("请输入有效的任务ID！")
-        return "请输入任务ID。"
+        gr.Warning("请先从列表中选择一个任务！")
+        return gr.update(), gr.update()
+    
+    # Show confirmation row, Hide default row
+    return gr.update(visible=False), gr.update(visible=True)
+
+def cancel_cancel_op():
+    """Called when user clicks "No/Cancel" in the confirmation row."""
+    # Show default row, Hide confirmation row
+    return gr.update(visible=True), gr.update(visible=False)
+
+def execute_cancel_job(job_id_to_cancel: str):
+    """Called when user clicks "Yes" to confirm cancellation."""
+    if not job_id_to_cancel: return "未选择ID", gr.update(visible=True), gr.update(visible=False)
+
     try:
         response = api_client.cancel_job(job_id_to_cancel)
         msg = response.get("message", "任务已取消")
         gr.Info(msg)
-        return msg
+        # Restore buttons to default state
+        return msg, gr.update(visible=True), gr.update(visible=False)
     except requests.RequestException as e:
         error_detail = e.response.json().get('detail', '未知错误')
         gr.Warning(f"操作失败: {error_detail}")
-        return f"操作失败: {error_detail}"
+        return f"操作失败: {error_detail}", gr.update(visible=True), gr.update(visible=False)
+# ========================== END: MODIFICATION ============================
 
 def send_or_schedule_email(action, receiver_selection, template_choice, custom_subject, send_at, silent_run, attachment_files_list, *dynamic_field_values):
     """Callback to handle both 'send now' and 'schedule once' actions."""
@@ -284,7 +303,9 @@ def handle_update_job(job_id, job_type, cron_name, cron_string, cron_subscribers
     fields = state.TEMPLATES_METADATA.get(template_key, {}).get("fields", [])
     template_data = {field["name"]: dynamic_field_values[i*2+1] if field.get("type") == "number" else dynamic_field_values[i*2] for i, field in enumerate(fields)}
     
-    payload = { "template_type": template_key, "template_data": template_data, "custom_subject": custom_subject, "silent_run": silent_run }
+    payload = { "template_type": template_key, "template_data": template_data, "custom_subject": custom_subject,
+               "silent_run": silent_run
+              }
 
     if job_type == 'cron':
         emails = get_emails_from_selection_list(cron_subscribers)
@@ -390,8 +411,15 @@ def toggle_template_fields(max_fields, choice):
     return updates
 
 def on_select_job(df_input: pd.DataFrame, evt: gr.SelectData):
-    """Callback for when a row is selected in the jobs dataframe, fetching details to populate the edit form."""
-    TOTAL_EDIT_OUTPUTS = 13 + 2 + (10 * 3) + 1 # Fixed + Dynamic Area + (Max Fields * 3)
+    """
+    Callback for when a row is selected in the jobs dataframe.
+    Populates the edit form.
+    CRITICAL FIX: 
+    1. Returns explicit list to avoid dictionary ordering issues.
+    2. Uses gr.Info to give user immediate feedback that selection worked.
+    """
+    # Total outputs = 14 fixed fields + 2 dynamic areas + (10 * 3 fields) = 46 items
+    TOTAL_EDIT_OUTPUTS = 14 + 2 + (10 * 3)
     
     if df_input.empty or evt.index is None:
         return [gr.update()] * TOTAL_EDIT_OUTPUTS
@@ -402,45 +430,58 @@ def on_select_job(df_input: pd.DataFrame, evt: gr.SelectData):
         job = api_client.get_job_details(job_id)
 
         if not all(k in job for k in ['template_type']):
-            gr.Info(f"任务 '{job.get('name')}' 是一个内置的系统任务或参数不完整，不支持编辑。")
-            updates = [gr.update()] * TOTAL_EDIT_OUTPUTS
-            updates[0] = gr.update(visible=False)
-            updates[1] = job_id
-            return updates
+            gr.Info(f"任务 '{job.get('name')}' 是内置任务或参数不完整，不支持编辑。")
+            updates_list = [gr.update()] * TOTAL_EDIT_OUTPUTS
+            # Hide the edit column to avoid confusion
+            updates_list[0] = gr.update(visible=False)
+            return updates_list
 
-        # 1. Fixed component updates
+        gr.Info(f"已加载任务: {job.get('name')}")
+
+        # --- 1. Prepare Fixed Component Updates ---
         template_key = job.get("template_type")
         template_data = job.get("template_data", {})
         silent_run_status = job.get("silent_run", False)
         
-        updates = {
-            "edit_job_column": gr.update(visible=True),
-            "job_id_input": job_id, "edit_job_id_state": job_id, "edit_job_type_state": job["trigger_type"],
-            "edit_template_dropdown": gr.update(value=get_display_name_from_template_key(template_key)),
-            "edit_custom_subject": job.get("custom_subject"),
-            "edit_cron_group": gr.update(visible=False), "edit_date_group": gr.update(visible=False),
-            "edit_cron_name": "", "edit_cron_string": "", "edit_cron_subscribers": gr.update(value=[]),
-            "edit_date_receiver": gr.update(value=None), "edit_date_send_at": "",
-            "edit_silent_run_checkbox": gr.update(value=silent_run_status)
-        }
+        # Determine visibility of type-specific groups
+        is_cron = (job["trigger_type"] == 'cron')
+        is_date = (job["trigger_type"] == 'date')
+        
+        # Prepare lists for selection components
+        cron_subscribers_val = find_selections_from_emails(job.get("receiver_emails", [])) if is_cron else []
+        date_receiver_val = find_selection_from_email(job.get("receiver_email", "")) if is_date else None
 
-        if job["trigger_type"] == 'cron':
-            receivers = find_selections_from_emails(job.get("receiver_emails", []))
-            updates.update({
-                "edit_cron_group": gr.update(visible=True), "edit_cron_name": job["name"],
-                "edit_cron_string": job["cron_string"], "edit_cron_subscribers": gr.update(value=receivers)
-            })
-        elif job["trigger_type"] == 'date':
-            receiver = find_selection_from_email(job.get("receiver_email", ""))
-            updates.update({
-                "edit_date_group": gr.update(visible=True), "edit_date_receiver": gr.update(value=receiver),
-                "edit_date_send_at": job["run_date"]
-            })
+        # Build fixed updates list explicitly matching main.py order:
+        # [edit_column, job_id_input, edit_id_state, edit_type_state, 
+        #  edit_template_dd, edit_custom_subject, edit_cron_group, edit_date_group,
+        #  edit_cron_name, edit_cron_string, edit_cron_subscribers,
+        #  edit_date_receiver, edit_date_send_at, edit_silent_run_checkbox]
+        
+        fixed_updates = [
+            gr.update(visible=True), # edit_column
+            job_id,                  # job_id_input
+            job_id,                  # edit_id_state
+            job["trigger_type"],     # edit_type_state
+            gr.update(value=get_display_name_from_template_key(template_key)), # edit_template_dd
+            job.get("custom_subject", ""), # edit_custom_subject
+            gr.update(visible=is_cron),    # edit_cron_group
+            gr.update(visible=is_date),    # edit_date_group
+            job.get("name", "") if is_cron else "", # edit_cron_name
+            job.get("cron_string", "") if is_cron else "", # edit_cron_string
+            gr.update(value=cron_subscribers_val), # edit_cron_subscribers
+            gr.update(value=date_receiver_val),    # edit_date_receiver
+            job.get("run_date", "") if is_date else "", # edit_date_send_at
+            gr.update(value=silent_run_status)     # edit_silent_run_checkbox
+        ]
 
-        # 2. Dynamic form area updates
+        # --- 2. Prepare Dynamic Field Updates ---
         meta = state.TEMPLATES_METADATA.get(template_key, {})
-        updates["edit_dynamic_form_area"] = gr.update(visible=True)
-        updates["edit_form_description"] = gr.update(value=f"#### {meta.get('description', '')}")
+        
+        # Dynamic Area visibility & Description
+        dynamic_area_updates = [
+            gr.update(visible=True), # edit_dynamic_area
+            gr.update(value=f"#### {meta.get('description', '')}") # edit_form_desc
+        ]
 
         # 3. Dynamic field updates
         dynamic_field_updates = []
@@ -450,17 +491,23 @@ def on_select_job(df_input: pd.DataFrame, evt: gr.SelectData):
                 field = fields[i]
                 f_type = field.get("type", "text") # Get type for logic
                 val = template_data.get(field["name"], field.get("default"))
-                dynamic_field_updates.append(gr.update(visible=True)) # Group
+                
+                # Group visible
+                dynamic_field_updates.append(gr.update(visible=True))
+                
                 if f_type == "number":
-                    dynamic_field_updates.extend([gr.update(visible=False), gr.update(visible=True, value=val)])
+                    dynamic_field_updates.append(gr.update(visible=False)) # Textbox
+                    dynamic_field_updates.append(gr.update(visible=True, value=val)) # Number
                 else:
                     lines = 3 if f_type == "textarea" else 1
-                    dynamic_field_updates.extend([gr.update(visible=True, value=val, lines=lines), gr.update(visible=False)])
+                    dynamic_field_updates.append(gr.update(visible=True, value=val, lines=lines)) # Textbox
+                    dynamic_field_updates.append(gr.update(visible=False)) # Number
             else:
+                # Reset unused fields
                 dynamic_field_updates.extend([gr.update(visible=False), gr.update(value=""), gr.update(value=None)])
         
-        # Combine and return in correct order
-        return list(updates.values()) + dynamic_field_updates
+        # Combine all parts
+        return fixed_updates + dynamic_area_updates + dynamic_field_updates
         
     except requests.RequestException as e:
         gr.Error(f"获取任务详情失败: {e}")

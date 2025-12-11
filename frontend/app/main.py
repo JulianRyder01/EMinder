@@ -2,13 +2,11 @@
 # ========================== START: MODIFICATION (Wiring and Robustness) ==========================
 # DESIGNER'S NOTE:
 # This file assembles the UI and wires the event handlers.
-# Key fixes and restorations have been made here:
-# 1. **Complete Data Loading**: Ensured that on app start, ALL dropdowns and lists across ALL tabs
-#    (including the previously missed 'Edit Job' form) are populated with data.
-# 2. **Confirmation Dialog**: Re-instated the crucial 'confirm' dialog for the 'Cancel Job' button.
-# 3. **Smart Navigation**: The `.then()` chain for creating tasks now uses a handler (`navigate_on_success`)
-#    to conditionally navigate to the jobs tab only on success.
-# 4. **'Run Now' Wiring**: The new 'Run Now' button is now correctly wired to its handler.
+#
+# CHANGES:
+# 1. Wired up the new "Cancel Task" interactive UI flow (Show Modal -> Confirm -> Delete).
+#    This replaces the 'js' parameter wiring.
+# 2. Updated the `on_select_job` wiring to match the new robust return list structure.
 
 import os
 import gradio as gr
@@ -84,13 +82,10 @@ def main():
         # 修正了 sub_refresh_outputs 列表，确保所有需要订阅者列表的组件都被包含在内。
         # 列表现在包含7个组件，与 handler 的返回值一一对应。
         sub_refresh_outputs = [
-            sub_ui["dataframe"], 
-            sub_ui["status_output"], 
-            manual_ui["receiver_dd"], 
-            schedule_ui["receiver_dd"], 
+            sub_ui["dataframe"], sub_ui["status_output"], 
+            shared_receiver_dd,             
             cron_ui["receiver_subscribers"],
-            jobs_ui["edit_date_receiver"],    # 编辑表单中的 'date' 类型任务接收者
-            jobs_ui["edit_cron_subscribers"]  # 编辑表单中的 'cron' 类型任务接收者
+            jobs_ui["edit_date_receiver"]
         ]
         # ========================== END: MODIFICATION ============================
         
@@ -128,12 +123,11 @@ def main():
             form_ui["clear_attachments_btn"].click(lambda: ([], ""), outputs=[form_ui["attachment_state"], form_ui["attachment_display"]])
             form_ui["action_btn"].click(
                 handlers.send_or_schedule_email,
-                inputs=[form_ui["action_type"], form_ui["receiver_dd"], form_ui["template_dd"], form_ui["custom_subject"], form_ui["send_at_input"], form_ui["silent_run_checkbox"], form_ui["attachment_state"]] + form_ui["all_field_inputs"],
+                inputs=[form_ui["action_type"], shared_receiver_dd, form_ui["template_dd"], form_ui["custom_subject"], form_ui["send_at_input"], form_ui["silent_run_checkbox"], form_ui["attachment_state"]] + form_ui["all_field_inputs"],
                 outputs=form_ui["output_text"]
             ).then(handlers.navigate_on_success, inputs=form_ui["output_text"], outputs=tabs).then(handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]])
             
         # Schedule Cron Job Tab Events
-        cron_ui["template_dd"].change(partial(handlers.toggle_template_fields, ui.MAX_FIELDS), inputs=cron_ui["template_dd"], outputs=cron_ui["dynamic_outputs"])
         cron_ui["create_btn"].click(
             handlers.handle_schedule_cron,
             inputs=[cron_ui["job_name"], cron_ui["cron_string"], cron_ui["receiver_subscribers"], cron_ui["receiver_custom"], cron_ui["template_dd"], cron_ui["custom_subject"], cron_ui["silent_run_checkbox"]] + cron_ui["all_field_inputs"],
@@ -144,19 +138,35 @@ def main():
         jobs_ui["tab"].select(handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]])
         jobs_ui["refresh_btn"].click(handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]])
         jobs_ui["cancel_btn"].click(
-            handlers.cancel_job_by_id, inputs=[jobs_ui["job_id_input"]], outputs=[jobs_ui["cancel_status"]],
-            js='_ => confirm("您确定要取消这个计划任务吗？此操作无法撤销。")'
-        ).then(handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]])
+            handlers.ask_confirm_cancel_job, 
+            inputs=[jobs_ui["job_id_input"]], 
+            outputs=[jobs_ui["default_action_row"], jobs_ui["confirm_action_row"]]
+        )
+        # 2. Click Yes -> Delete -> Restore UI -> Refresh List
+        jobs_ui["confirm_yes_btn"].click(
+            handlers.execute_cancel_job,
+            inputs=[jobs_ui["job_id_input"]],
+            outputs=[jobs_ui["cancel_status"], jobs_ui["default_action_row"], jobs_ui["confirm_action_row"]]
+        ).then(
+            handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]]
+        )
+        # 3. Click No -> Restore UI
+        jobs_ui["confirm_no_btn"].click(
+            handlers.cancel_cancel_op,
+            outputs=[jobs_ui["default_action_row"], jobs_ui["confirm_action_row"]]
+        )
+        # ========================== END: MODIFICATION ============================
+
         jobs_ui["run_now_btn"].click(handlers.handle_run_job_now, inputs=[jobs_ui["job_id_input"]], outputs=[jobs_ui["cancel_status"]])
 
         # Job Edit Form Events
-        jobs_ui["edit_template_dd"].change(partial(handlers.toggle_template_fields, ui.MAX_FIELDS), inputs=jobs_ui["edit_template_dd"], outputs=jobs_ui["dynamic_outputs"])
         edit_form_outputs_list = [
             jobs_ui["edit_column"], jobs_ui["job_id_input"], jobs_ui["edit_id_state"], jobs_ui["edit_type_state"],
             jobs_ui["edit_template_dd"], jobs_ui["edit_custom_subject"], jobs_ui["edit_cron_group"], jobs_ui["edit_date_group"],
             jobs_ui["edit_cron_name"], jobs_ui["edit_cron_string"], jobs_ui["edit_cron_subscribers"],
             jobs_ui["edit_date_receiver"], jobs_ui["edit_date_send_at"], jobs_ui["edit_silent_run_checkbox"]
-        ] + jobs_ui["dynamic_outputs"]
+        ] + edit_dynamic_outputs
+        
         jobs_ui["dataframe"].select(handlers.on_select_job, inputs=[jobs_ui["dataframe"]], outputs=edit_form_outputs_list)
         jobs_ui["cancel_edit_btn"].click(lambda: gr.update(visible=False), outputs=jobs_ui["edit_column"])
         

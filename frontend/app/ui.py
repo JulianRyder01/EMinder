@@ -1,10 +1,12 @@
 # frontend/app/ui.py
 # ========================== START: MODIFICATION (Feature Addition) ==========================
 # DESIGNER'S NOTE:
-# This new file is dedicated to building the user interface. It defines the layout and
-# creates all the Gradio components, but contains no business logic. Each major UI section
-# (like a tab) is encapsulated in its own function, which returns a dictionary of the
-# interactive components that need to be accessed by the event handlers.
+# This file is dedicated to building the user interface. It defines the layout and
+# creates all the Gradio components.
+#
+# CHANGES:
+# 1. create_job_management_tab: Added a 'confirmation_row' to handle safe deletion within the UI
+#    instead of using browser alerts.
 
 import gradio as gr
 import datetime
@@ -41,9 +43,6 @@ def create_email_form(is_scheduled: bool):
     """
     Builds the reusable form for sending or scheduling emails.
     """
-    # ========================== START: MODIFICATION ==========================
-    # DESIGNER'S NOTE:
-    # 修正 KeyError 的核心：将接收者下拉框的创建移入此函数，使其成为表单的一部分。
     gr.Markdown("### 1. 选择或输入接收者邮箱")
     with gr.Row():
         receiver_dd = gr.Dropdown(
@@ -51,7 +50,6 @@ def create_email_form(is_scheduled: bool):
             allow_custom_value=True,
             interactive=True
         )
-    # ========================== END: MODIFICATION ============================
 
     gr.Markdown("### 2. 选择邮件模板")
     load_status = gr.Markdown()
@@ -77,9 +75,8 @@ def create_email_form(is_scheduled: bool):
         clear_attachments_btn = gr.Button("🗑️ 清空列表")
 
     gr.Markdown("### 5. 执行操作")
-# ========================== START: MODIFICATION (需求 ①) ==========================
     silent_run_checkbox = gr.Checkbox(label="静默运行", info="勾选后，任务将正常执行（包括脚本运行、文件归档等），但不会发送邮件。")
-# ========================== END: MODIFICATION (需求 ①) ============================
+    
     if is_scheduled:
         now_plus_10 = (datetime.datetime.now() + datetime.timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M")
         send_at_input = gr.Textbox(label="预定发送时间", value=now_plus_10, info="格式: YYYY-MM-DD HH:MM")
@@ -97,9 +94,7 @@ def create_email_form(is_scheduled: bool):
     dynamic_outputs = [dynamic_form_area, form_description] + [comp for d in dynamic_fields_components for comp in d.values()]
 
     components = {
-        # ========================== START: MODIFICATION ==========================
-        "receiver_dd": receiver_dd, # 将新创建的组件添加到返回字典中
-        # ========================== END: MODIFICATION ============================
+        "receiver_dd": receiver_dd,
         "load_status": load_status, "template_dd": template_dd, "custom_subject": custom_subject,
         "dynamic_form_area": dynamic_form_area, "form_description": form_description,
         "dynamic_fields": dynamic_fields_components, "all_field_inputs": all_field_inputs,
@@ -143,9 +138,7 @@ def create_cron_job_tab():
                         dynamic_fields_components.append({"group": fg, "text": ct, "number": cn})
         
         gr.Markdown("### 4. 创建任务")
-# ========================== START: MODIFICATION (需求 ①) ==========================
         silent_run_checkbox = gr.Checkbox(label="静默运行", info="勾选后，任务将正常执行（包括脚本运行、文件归档等），但不会发送邮件。")
-# ========================== END: MODIFICATION (需求 ①) ============================
         with gr.Row():
             create_btn = gr.Button("✔️ 创建周期任务", variant="primary")
         output_text = gr.Textbox(label="操作结果", interactive=False)
@@ -159,9 +152,7 @@ def create_cron_job_tab():
         "custom_subject": custom_subject, "dynamic_form_area": dynamic_form_area, "form_description": form_description,
         "dynamic_fields": dynamic_fields_components, "all_field_inputs": all_field_inputs, "dynamic_outputs": dynamic_outputs,
         "create_btn": create_btn, "output_text": output_text,
-# ========================== START: MODIFICATION (需求 ①) ==========================
         "silent_run_checkbox": silent_run_checkbox
-# ========================== END: MODIFICATION (需求 ①) ============================
     }
     return components
 
@@ -179,12 +170,22 @@ def create_job_management_tab():
                 with gr.Group():
                     gr.Markdown("### 操作选中任务")
                     job_id_input = gr.Textbox(label="要操作的任务ID (自动填充)")
-                    with gr.Row():
+                    
+                    # ========================== START: MODIFICATION (Fix Cancel UI) ==========================
+                    # DESIGNER'S NOTE: 
+                    # 使用两组 Row 来实现“交互式确认”。
+                    # 'default_action_row' 显示常规按钮。
+                    # 'confirm_action_row' 默认隐藏，仅在点击删除时显示，提供 Yes/No 选项。
+                    # 这避免了使用浏览器原生弹窗，视觉更统一。
+                    with gr.Row(visible=True) as default_action_row:
                         cancel_btn = gr.Button("🗑️ 取消任务", variant="stop")
-                        # ========================== START: MODIFICATION (Feature Restoration) ==========================
-                        # DESIGNER'S NOTE: The 'Run Now' button was missing from the split code. It's restored here.
                         run_now_btn = gr.Button("▶️ 立即运行", variant="secondary")
-                        # ========================== END: MODIFICATION (Feature Restoration) ============================
+                    
+                    with gr.Row(visible=False) as confirm_action_row:
+                        confirm_yes_btn = gr.Button("⚠️ 确认删除", variant="stop")
+                        confirm_no_btn = gr.Button("❌ 再想想", variant="secondary")
+                    # ========================== END: MODIFICATION ============================
+
                     cancel_status = gr.Textbox(label="操作结果", interactive=False)
             
             with gr.Column(scale=3, visible=False) as edit_column:
@@ -215,9 +216,7 @@ def create_job_management_tab():
                                 en = gr.Number(label=f"字段{i+1}", visible=False)
                             edit_dynamic_fields.append({"group": fg, "text": et, "number": en})
                     
-# ========================== START: MODIFICATION (需求 ①) ==========================
                     edit_silent_run_checkbox = gr.Checkbox(label="静默运行", info="勾选后，任务将正常执行，但不会发送邮件。")
-# ========================== END: MODIFICATION (需求 ①) ============================
                     with gr.Row():
                         update_btn = gr.Button("✔️ 更新任务", variant="primary")
                         cancel_edit_btn = gr.Button("❌ 取消编辑")
@@ -228,7 +227,13 @@ def create_job_management_tab():
 
     components = {
         "tab": tab, "refresh_btn": refresh_btn, "status_output": status_output, "dataframe": dataframe,
-        "job_id_input": job_id_input, "cancel_btn": cancel_btn, "run_now_btn": run_now_btn, "cancel_status": cancel_status,
+        "job_id_input": job_id_input, "cancel_status": cancel_status,
+        
+        # New components for confirmation UI
+        "cancel_btn": cancel_btn, "run_now_btn": run_now_btn,
+        "confirm_yes_btn": confirm_yes_btn, "confirm_no_btn": confirm_no_btn,
+        "default_action_row": default_action_row, "confirm_action_row": confirm_action_row,
+
         "edit_column": edit_column, "edit_id_state": edit_id_state, "edit_type_state": edit_type_state,
         "edit_cron_group": edit_cron_group, "edit_cron_name": edit_cron_name, "edit_cron_string": edit_cron_string,
         "edit_cron_subscribers": edit_cron_subscribers, "edit_cron_custom": edit_cron_custom,
@@ -240,8 +245,6 @@ def create_job_management_tab():
         "edit_silent_run_checkbox": edit_silent_run_checkbox
     }
     return components
-
-# ========================== END: MODIFICATION (Logic Simplification) ============================
 
 def create_llm_settings_tab():
     """构建 "LLM 服务配置" 选项卡的UI界面。"""
