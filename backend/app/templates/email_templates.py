@@ -166,7 +166,10 @@ class TemplateManager:
                 .container {{ max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); overflow: hidden; }}
                 .header {{ background-color: #4CAF50; color: #ffffff; padding: 30px 25px; text-align: center; }}
                 .header h1 {{ margin: 0; font-size: 28px; font-weight: 600; }}
-                .content {{ padding: 30px 25px; color: #555; }}
+                /* ========================== START: MODIFICATION ========================== */
+                /* DESIGNER'S NOTE: 为内容区域添加强制换行样式，防止长文本溢出。 */
+                .content {{ padding: 30px 25px; color: #555; word-wrap: break-word; word-break: break-word; }}
+                /* ========================== END: MODIFICATION ============================ */
                 .content p {{ margin: 0 0 15px; }}
                 .content h4 {{ color: #333; margin-top: 25px; margin-bottom: 10px; border-left: 4px solid #4CAF50; padding-left: 10px; font-size: 18px; }}
                 .button {{ background-color: #4CAF50; color: #ffffff !important; padding: 14px 25px; text-align: center; text-decoration: none; display: inline-block; border-radius: 8px; font-weight: bold; font-size: 16px; }}
@@ -176,6 +179,15 @@ class TemplateManager:
                 li {{ margin-bottom: 8px; }}
                 .progress-bar {{ width: 100%; background-color: #e0e0e0; border-radius: 5px; height: 20px; overflow: hidden; }}
                 .progress {{ background-color: #4CAF50; height: 100%; text-align: center; color: white; line-height: 20px; font-weight: bold; border-radius: 5px; }}
+                /* ========================== START: MODIFICATION ========================== */
+                /* DESIGNER'S NOTE: 
+                   为 <pre> 标签添加全局样式，确保代码块和长文本能够自动换行，
+                   这对于显示日志或AI生成的长字符串至关重要。*/
+                pre {{
+                    white-space: pre-wrap;   /* 保留空白符序列，但允许正常换行 */
+                    word-wrap: break-word;   /* 在长单词或URL内部进行换行 */
+                }}
+                /* ========================== END: MODIFICATION ============================ */
             </style>
         </head>
         <body>

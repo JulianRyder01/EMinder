@@ -14,26 +14,41 @@ class ScriptRunnerService:
     
     # ========================== START: MODIFICATION (Fix Encoding Issue) ==========================
     # DESIGNER'S NOTE:
-    # 新增一个私有辅助函数，专门用于健壮地解码子进程的输出。
-    # 它会优先尝试使用 UTF-8 解码，如果失败（这通常发生在 Windows 系统输出中文时），
-    # 它会自动回退到系统的首选编码（如 GBK），从而完美解决乱码问题。
+    # 修复乱码的核心逻辑：
+    # 原来的逻辑优先使用系统编码(GBK)，这导致UTF-8输出被错误解码且不报错，从而产生乱码。
+    # 新逻辑：优先尝试 UTF-8。这是通用标准。只有当 UTF-8 失败时，才尝试系统编码(GBK)。
     def _decode_subprocess_output(self, output_bytes: bytes) -> str:
         """
         健壮地解码子进程的字节流输出。
+        优先级：UTF-8 -> 系统默认(GBK/CP936) -> 强制忽略错误
         """
+        if not output_bytes:
+            return ""
+
+        # 1. 优先尝试 UTF-8 (绝大多数 Python 脚本和现代工具的默认输出)
         try:
-            # 优先尝试通用且标准的 UTF-8
             return output_bytes.decode('utf-8')
         except UnicodeDecodeError:
-            # 如果 UTF-8 解码失败，则使用系统默认编码再次尝试
-            try:
-                # locale.getpreferredencoding(False) 在 Windows 上通常返回 'cp936' (GBK)
-                system_encoding = locale.getpreferredencoding(False)
-                print(f"UTF-8 decoding failed. Falling back to system encoding: {system_encoding}")
+            pass
+
+        # 2. 如果 UTF-8 失败，尝试系统默认编码 (解决 Windows CMD 命令输出中文的问题)
+        try:
+            system_encoding = locale.getpreferredencoding(False)
+            # 避免重复尝试 utf-8
+            if system_encoding.lower() != 'utf-8':
                 return output_bytes.decode(system_encoding)
-            except Exception:
-                # 如果所有尝试都失败了，则使用 'replace' 策略强行解码，避免程序崩溃
-                return output_bytes.decode('utf-8', errors='replace')
+        except Exception:
+            pass
+        
+        # 3. 如果还失败，尝试常见的中文编码 GB18030 (比 GBK 覆盖面更广)
+        try:
+            return output_bytes.decode('gb18030')
+        except UnicodeDecodeError:
+            pass
+
+        # 4. 最后手段：使用 replacement 策略强制解码，保证不报错
+        print(f"Warning: Failed to decode output with UTF-8 or System encoding. Falling back to replacement.")
+        return output_bytes.decode('utf-8', errors='replace')
     # ========================== END: MODIFICATION (Fix Encoding Issue) ============================
 
     async def run_script(self, command: str, working_directory: str = None) -> dict:

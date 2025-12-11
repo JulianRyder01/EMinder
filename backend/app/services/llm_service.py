@@ -89,7 +89,25 @@ class LLMService:
                 if "message" in first_choice and "content" in first_choice["message"]:
                     processed_content = first_choice["message"]["content"]
                     self.logger.info("成功从LLM服务获取到响应。")
-                    return {"success": True, "content": processed_content}
+                    
+                    # ========================== START: MODIFICATION ==========================
+                    # DESIGNER'S NOTE:
+                    # 需求：去除AI模型返回内容中可能包含的Markdown代码块标记，
+                    # 确保邮件内容干净，不会显示```markdown等无关字符。
+                    cleaned_content = processed_content.strip()
+                    if cleaned_content.startswith("```markdown"):
+                        # Strip ```markdown at the start
+                        cleaned_content = cleaned_content[len("```markdown"):].strip()
+                    elif cleaned_content.startswith("```"):
+                        # Strip generic ``` at the start, in case the language is not specified
+                        cleaned_content = cleaned_content[len("```"):].strip()
+                    
+                    if cleaned_content.endswith("```"):
+                        # Strip ``` at the end
+                        cleaned_content = cleaned_content[:-len("```")].strip()
+                    
+                    return {"success": True, "content": cleaned_content}
+                    # ========================== END: MODIFICATION ============================
 
             error_message = f"API 响应格式不正确，缺少有效内容。服务商: {provider_name}, 响应: {response_data}"
             self.logger.error(error_message)

@@ -71,19 +71,6 @@ except ImportError:
         escaped_text = md_text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         return f"<pre style='white-space: pre-wrap; word-wrap: break-word;'>{escaped_text}</pre>"
 
-# ===================================================================================
-# 【新增】导入大模型服务
-# ===================================================================================
-from ..services.llm_service import llm_service
-
-
-# ========================== START: 修改区域 (需求 ①) ==========================
-# DESIGNER'S NOTE:
-# 导入新创建的 ScriptRunnerService，用于执行后台脚本。
-# 这是实现“自动运行脚本并获取日志结果”模板的核心依赖。
-from ..services.script_runner_service import script_runner_service
-# ========================== END: 修改区域 (需求 ①) ============================
-
 
 # ===================================================================================
 # 新增功能：报告文件读取 - 辅助函数
@@ -97,16 +84,13 @@ def _read_and_process_report_file(report_folder: str, report_filename: str) -> d
     :return: 一个包含处理结果的字典。
     """
     try:
-        # ========================== START: 修改区域 (支持绝对路径) ==========================
         # DESIGNER'S NOTE:
         # 这里的路径解析逻辑已增强，以稳健地处理绝对路径和相对路径。
         # 1. 如果 `report_folder` 是一个绝对路径 (例如 "C:/reports" 或 "/var/logs")，它将被直接使用。
         # 2. 如果它是一个相对路径 (例如 "reports/"), 它将被解析为相对于 `backend` 项目目录的路径。
-        # 这完全符合您的需求，既支持了绝对路径，又为相对路径提供了可预测的行为。
         backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         abs_report_folder = report_folder if os.path.isabs(report_folder) else os.path.abspath(os.path.join(backend_dir, report_folder))
         file_path = os.path.join(abs_report_folder, report_filename)
-        # ========================== END: 修改区域 (支持绝对路径) ============================
 
         if not os.path.exists(file_path):
             error_message = f"""
@@ -118,9 +102,6 @@ def _read_and_process_report_file(report_folder: str, report_filename: str) -> d
                     <li>报告文件夹名称是否正确 (支持绝对路径或相对`backend`的路径)。</li>
                     <li>报告文件名是否正确，包括后缀名。</li>
                     <li>文件是否已放置在指定文件夹中。</li>
-
-
-
                 </ul>
             """
             return {"error": True, "subject": f"错误：报告文件 {report_filename} 未找到", "html": error_message}
@@ -151,7 +132,8 @@ def _read_and_process_report_file(report_folder: str, report_filename: str) -> d
         """
         return {"error": True, "subject": f"错误：处理报告 {report_filename} 失败", "html": error_message}
 
-# ========================== START: 修改区域 (需求 ①) ==========================
+# ===================================================================================
+# 模块: 每日总结与计划 (Daily Summary & Plan)
 # ===================================================================================
 
 # --- 步骤 0: 内部辅助函数 ---
@@ -161,7 +143,6 @@ def _create_default_daily_template(filepath: str, plan_items_from_yesterday: lis
     在一个指定的路径创建一个默认的每日总结Markdown模板文件。
     新增功能：可以接收昨天的计划并自动填充到今天的待办中，并加入了“随手记”板块。
     """
-    # ========================== START: MODIFICATION (模板简化) ==========================
     template_header = f"# {datetime.date.today().strftime('%Y-%m-%d')} 每日总结与明日计划\n\n"
     
     # --- 动态构建 "今日事项" ---
@@ -257,7 +238,7 @@ async def _generate_period_summary(period_days: int, period_name: str, data: dic
             file_date = datetime.datetime.strptime(file_date_str, "%Y-%m-%d").date()
             if start_date <= file_date < today: # Exclude today
                 relevant_files.append((file_date, filepath))
-        except (ValueError, IndexError):
+        except (ValueError, TypeError):
             continue
     
     if not relevant_files:
@@ -316,7 +297,6 @@ async def _generate_period_summary(period_days: int, period_name: str, data: dic
     
     # 5. 调用AI并构建邮件
     ai_result = await llm_service.generate_text(prompt)
-    # ========================== END: MODIFICATION ============================
     ai_analysis_html = convert_markdown_to_html(ai_result['content']) if ai_result['success'] else f"<p>AI分析失败: {ai_result['content']}</p>"
 
     subject = f"您的专属{period_name}总结报告 ({start_date.strftime('%Y-%m-%d')} - {(today - datetime.timedelta(days=1)).strftime('%Y-%m-%d')})"
@@ -334,7 +314,6 @@ async def _generate_period_summary(period_days: int, period_name: str, data: dic
     """
     
     return {"subject": subject, "html": html_content}
-# ========================== END: MODIFICATION (需求 ②) ============================
 
 
 # --- 步骤 1: 【新模板】每日总结与明日计划 ---
@@ -411,8 +390,8 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
         # 3c. 构建AI Prompt
         prompt = f"""
 {system_prompt}
-请为我生成一份今日的总结报告。
-
+请为我生成一份总结报告。
+截至总结报告时，当前时间为 {datetime.datetime.now().strftime("%Y年%m月%d日%H:%M:%S")}
 **我的今日数据:**
 - **已完成事项**: {', '.join(parsed_data['done']) if parsed_data['done'] else '无'}
 - **未完成事项**: {', '.join(parsed_data['todo']) if parsed_data['todo'] else '无'}
@@ -493,9 +472,6 @@ async def generate_monthly_summary_plan_template(data: dict) -> dict:
     """生成月度总结报告。"""
     return await _generate_period_summary(30, "月度", data)
 
-# ===================================================================================
-# END OF MODIFICATION
-# ===================================================================================
 
 # ===================================================================================
 # 【模板】: 发送本地文件报告
@@ -536,9 +512,15 @@ def get_local_file_report_template(data: dict) -> dict:
 # ===================================================================================
 # 【模板】: 自动运行脚本并获取日志结果 (保持不变)
 # ===================================================================================
+# ========================== START: MODIFICATION (Flexible Attachments) ==========================
+# DESIGNER'S NOTE:
+# 我们大幅升级了这个模板的元数据和逻辑。
+# 1. 元数据：将 `generated_attachment_paths` 升级为 `attachment_rules`，支持更复杂的规则。
+# 2. 逻辑：引入 glob 模块，支持通配符 (*) 和目录扫描。
+# 3. 报告：在 HTML 中增加了一个附件列表板块，让用户清晰看到哪些文件被匹配到了。
 script_runner_meta = {
     "display_name": "自动运行脚本并获取日志结果",
-    "description": "在后台运行命令，捕获其输出，并将脚本生成的所有指定文件作为附件发送。",
+    "description": "在后台运行命令，捕获其输出。支持使用通配符或目录路径来灵活地收集和发送附件。",
     "fields": [
         {
             "name": "email_body_message",
@@ -546,8 +528,6 @@ script_runner_meta = {
             "type": "textarea",
             "default": "您好，这是脚本的运行报告，请查收附件中的文件（如有）。"
         },
-# ========================== START: MODIFICATION (Requirement ①) ==========================
-# DESIGNER'S NOTE: 新增邮件标题模板字段，允许用户自定义并使用特殊标记。
         {
             "name": "custom_subject",
             "label": "邮件标题模板",
@@ -555,7 +535,6 @@ script_runner_meta = {
             "default": "脚本 <ifsuccess> 报告 - <time>",
             "info": "使用 <time> 插入时间戳, <ifsuccess> 插入成功/失败状态"
         },
-# ========================== END: MODIFICATION (Requirement ①) ============================
         {
             "name": "script_command",
             "label": "脚本启动命令",
@@ -568,20 +547,18 @@ script_runner_meta = {
             "type": "text",
             "default": "D:\\Desktop\\Develop\\Automatics\\GymGenAuto"
         },
-        # ========================== START: MODIFICATION (Requirement ①) ==========================
-        # DESIGNER'S NOTE:
-        # 新增一个字段，用于让用户指定任务完成后需要嵌入到邮件正文的图片路径。
         {
-            "name": "generated_attachment_paths",
-            "label": "脚本生成的附件路径 (每行一个)",
+            "name": "attachment_rules",
+            "label": "附件收集规则 (每行一条)",
             "type": "textarea",
             "default": (
-                "D:\\Desktop\\Develop\\Automatics\\GymGenAuto\\generated_images\\output_1700.png\n"
-                "D:\\Desktop\\Develop\\Automatics\\GymGenAuto\\generated_images\\output_1830.png\n"
-                "D:\\Desktop\\Develop\\Automatics\\GymGenAuto\\generated_images\\output_2000.png"
-            )
+                "# 支持绝对路径、文件夹路径或 Glob 通配符\n"
+                "D:\\Logs\\error.log\n"
+                "D:\\Reports\\*.pdf\n"
+                "D:\\Output_Images\\"
+            ),
+            "info": "输入文件夹路径将发送该文件夹下的所有文件；使用 *.txt 等通配符可匹配多个文件。"
         },
-        # ========================== END: MODIFICATION (Requirement ①) ============================
         {
             "name": "log_summary_prompt",
             "label": "日志总结提示词 (可选, 留空不总结)",
@@ -594,22 +571,14 @@ script_runner_meta = {
 # --- 步骤 2: 编写模板生成函数 (异步) ---
 async def get_script_runner_template(data: dict) -> dict:
     """
-    执行脚本，处理日志，并生成附带附件的邮件内容。
-    这是一个异步函数，因为它需要等待脚本执行和可能的 LLM API 调用。
+    执行脚本，处理日志，并根据灵活的规则收集附件。
     """
     message = data.get("email_body_message", '').strip()
     command = data.get('script_command', '').strip()
     work_dir = data.get('working_directory', '.').strip()
-    attach_path = data.get('attach_file_path', '').strip()
     summary_prompt = data.get('log_summary_prompt', '').strip()
-    # ========================== START: MODIFICATION (Unified Attachment System) ==========================
-    generated_paths_str = data.get('generated_attachment_paths', '').strip()
-    # ========================== END: MODIFICATION (Unified Attachment System) ============================
-
-# ========================== START: MODIFICATION (Requirement ①) ==========================
-# DESIGNER'S NOTE: 从 data 字典中获取用户定义的标题模板。
+    attachment_rules_str = data.get('attachment_rules', '').strip()
     custom_subject_template = data.get('custom_subject', '脚本执行报告').strip()
-# ========================== END: MODIFICATION (Requirement ①) ============================
 
     if not command:
         return {
@@ -618,21 +587,52 @@ async def get_script_runner_template(data: dict) -> dict:
             "attachments": []
         }
     
-    # 脚本执行器现在内部处理绝对路径，这里无需转换
+    # 1. 执行脚本
     exec_result = await script_runner_service.run_script(command, work_dir)
 
-# ========================== START: MODIFICATION (Requirement ①) ==========================
-# DESIGNER'S NOTE:
-# 这是实现标题模板功能的核心逻辑。我们准备好替换的文本，然后对用户提供的模板字符串执行替换。
-    # 准备替换用的文本
+    # 2. 处理标题模板
     timestamp = exec_result.get('start_time', 'N/A')
     success_str = "成功" if exec_result['success'] else "失败"
-
-    # 执行替换，生成最终的邮件标题
     subject = custom_subject_template.replace("<time>", timestamp)
     subject = subject.replace("<ifsuccess>", success_str)
-# ========================== END: MODIFICATION (Requirement ①) ============================
     
+    # 3. 处理附件规则 (核心升级逻辑)
+    found_attachments = []
+    attachment_report_lines = [] # 用于在HTML中展示
+
+    if attachment_rules_str:
+        rules = [r.strip() for r in attachment_rules_str.split('\n') if r.strip() and not r.strip().startswith('#')]
+        
+        for rule in rules:
+            # 尝试作为 glob 模式处理 (glob 也兼容普通路径)
+            # 如果是目录，glob 默认不展开内容，需要我们手动处理
+            try:
+                # 检查是否是纯目录路径
+                if os.path.isdir(rule):
+                    # 如果是目录，列出目录下所有文件 (一级深度，不递归，为了安全)
+                    dir_files = [os.path.join(rule, f) for f in os.listdir(rule) if os.path.isfile(os.path.join(rule, f))]
+                    if dir_files:
+                        found_attachments.extend(dir_files)
+                        attachment_report_lines.append(f"<li>📂 目录 <code>{rule}</code>: 找到 {len(dir_files)} 个文件</li>")
+                    else:
+                        attachment_report_lines.append(f"<li>📂 目录 <code>{rule}</code>: 空文件夹或无权限</li>")
+                
+                else:
+                    # 尝试作为 glob 通配符处理
+                    matches = glob.glob(rule)
+                    if matches:
+                        files_only = [m for m in matches if os.path.isfile(m)]
+                        found_attachments.extend(files_only)
+                        attachment_report_lines.append(f"<li>🔍 规则 <code>{rule}</code>: 匹配到 {len(files_only)} 个文件</li>")
+                    else:
+                        attachment_report_lines.append(f"<li>⚠️ 规则 <code>{rule}</code>: 未找到任何匹配项</li>")
+            
+            except Exception as e:
+                attachment_report_lines.append(f"<li>❌ 规则 <code>{rule}</code> 处理出错: {str(e)}</li>")
+
+    # 去重
+    found_attachments = sorted(list(set(found_attachments)))
+
     # --- 构建 HTML 报告 ---
     status_color = "#4CAF50" if exec_result['success'] else "#F44336"
     status_text = "成功" if exec_result['success'] else "失败"
@@ -643,11 +643,7 @@ async def get_script_runner_template(data: dict) -> dict:
 
     stdout_html = escape_html(exec_result.get('stdout', ''))
     stderr_html = escape_html(exec_result.get('stderr', ''))
-    # ========================== START: MODIFICATION (Requirements ①, ③) ==========================
-    # DESIGNER'S NOTE:
-    # 核心逻辑变更：处理由脚本生成的所有附件。
-    # 我们不再区分图片或文件，所有路径都被统一处理并添加到 `attachments` 列表中。
-    # HTML 正文现在只显示一个确认列表，而不是尝试嵌入图片。
+
     html_parts = []
     html_parts.append(f"<h4>{message}</h4>")
 
@@ -662,35 +658,20 @@ async def get_script_runner_template(data: dict) -> dict:
             <li><strong>总耗时:</strong> {exec_result.get('duration_seconds', 'N/A')} 秒</li>
         </ul>""")
 
-    script_generated_attachments = []
-    
-    if generated_paths_str:
-        paths = [p.strip() for p in generated_paths_str.split('\n') if p.strip()]
-        
-        if paths:
-            attachment_html_list = "<ul>"
-            for path in paths:
-                # 注意：这里我们只检查路径是否为绝对路径，实际存在性由 email_service 在发送时最终确认。
-                # 这样即使脚本失败，我们仍然会尝试附加文件，这可能有助于调试。
-                if os.path.isabs(path):
-                    script_generated_attachments.append(path)
-                    attachment_html_list += f"<li>✓ {os.path.basename(path)}</li>"
-                else:
-                    attachment_html_list += f"<li style='color: red;'>✗ {os.path.basename(path)} (路径非绝对路径，已跳过)</li>"
-            attachment_html_list += "</ul>"
-            
-            html_parts.append(f"<h4>由脚本生成的附件 📎</h4>{attachment_html_list}")
-    # ========================== END: MODIFICATION (Unified Attachment System) ============================
-
-    
+    # 附件报告板块
+    if attachment_report_lines:
+        html_parts.append("<h4>📎 附件收集报告</h4>")
+        html_parts.append("<ul>" + "".join(attachment_report_lines) + "</ul>")
+        if found_attachments:
+             html_parts.append(f"<p><strong>共计发送 {len(found_attachments)} 个文件。</strong></p>")
+    elif attachment_rules_str:
+        html_parts.append("<h4>📎 附件收集报告</h4><p>未找到任何符合规则的文件。</p>")
 
     # --- (可选) LLM 总结 ---
     log_for_summary = exec_result.get('stdout') or exec_result.get('stderr')
     if summary_prompt and log_for_summary:
         full_prompt = f"{summary_prompt}\n\n--- 日志开始 ---\n{log_for_summary}\n--- 日志结束 ---"
-        # ========================== START: MODIFICATION ==========================
         summary_result = await llm_service.generate_text(full_prompt)
-        # ========================== END: MODIFICATION ============================
         
         summary_html = ""
         if summary_result["success"]:
@@ -712,16 +693,13 @@ async def get_script_runner_template(data: dict) -> dict:
         <pre style="white-space: pre-wrap; word-wrap: break-word; background-color: #fbe9e7; color: #b71c1c; padding: 15px; border-radius: 8px;">{stderr_html}</pre>
         """)
 
-
-    # --- 返回符合新规范的完整字典 ---
     return {
         "subject": subject,
         "html": "".join(html_parts),
-        # 关键：返回一个包含所有待附加文件路径的列表
-        "attachments": script_generated_attachments
+        "attachments": found_attachments
     }
-# ===================================================================================
-# ========================== END: 修改区域 (需求 ①) ============================
+# ========================== END: MODIFICATION (Flexible Attachments) ============================
+
 
 # ===================================================================================
 # 【新增模板】: DeepSeek 大模型工作流
@@ -753,14 +731,13 @@ async def get_deepseek_workflow_template(data: dict) -> dict:
             "html": "<h4>错误</h4><p>您没有提供任何需要处理的文本内容。</p>"
         }
     
-    # ========================== START: MODIFICATION ==========================
-    # 调用通用的 generate_text 方法
+    # 【异步改造】调用异步的 LLM 服务
     result = await llm_service.generate_text(text_to_process)
     # ========================== END: MODIFICATION ============================
     
     if result["success"]:
         # 处理成功
-        subject = f"AI处理结果 - {text_to_process[:20]}..."
+        subject = f"AI 处理结果 - {text_to_process[:20]}..."
         # 将原始文本和处理结果都包含在邮件中，方便对照
         # 使用 pre 标签保留换行和空格，保证格式
         html_content = f"""
@@ -874,6 +851,75 @@ def get_daily_file_report_template(data: dict) -> dict:
         }
         
     return _read_and_process_report_file(report_folder, today_filename)
+
+
+# ========================== START: 新增区域 (需求：快速发送Markdown消息) ==========================
+# ===================================================================================
+# 【模板】: 快速发送消息 (Markdown)
+# 设计师注：提供一个极简的接口，让用户快速发送任意Markdown格式的文本消息。
+# 适用于需要定时发送通知、简报、思考笔记等场景。
+# ===================================================================================
+
+# --- 步骤 1: 定义元数据 ---
+quick_message_meta = {
+    "display_name": "快速发送消息 (Markdown)",
+    "description": "快速发送一段支持Markdown格式的文字消息。系统会自动将Markdown渲染为HTML格式。",
+    "fields": [
+        {
+            "name": "message",
+            "label": "消息内容 (支持Markdown格式)",
+            "type": "textarea",
+            "default": "# 通知标题\n\n## 要点1\n- 内容A\n- 内容B\n\n## 要点2\n> 引用内容\n\n**加粗**、*斜体*等格式均可使用。"
+        },
+        {
+            "name": "custom_subject",
+            "label": "邮件主题 (可选)",
+            "type": "text",
+            "default": "",
+            "info": "留空时，系统会自动从消息内容的第一行生成主题"
+        }
+    ]
+}
+
+# --- 步骤 2: 编写模板生成函数 ---
+def get_quick_message_template(data: dict) -> dict:
+    """
+    快速发送消息模板：将用户输入的Markdown文本渲染为HTML并发送。
+    支持自定义邮件主题，如果不提供则自动提取消息第一行作为主题。
+    """
+    message = data.get('message', '').strip()
+    custom_subject = data.get('custom_subject', '').strip()
+    
+    # 健壮性：检查内容是否为空
+    if not message:
+        return {
+            "subject": "错误：消息内容为空",
+            "html": "<h4>错误</h4><p>您没有提供任何消息内容。请在'消息内容'字段中输入您要发送的文本。</p>"
+        }
+    
+    # 将Markdown转换为HTML
+    html_content = convert_markdown_to_html(message)
+    
+    # 生成邮件主题
+    if custom_subject:
+        subject = custom_subject
+    else:
+        # 自动从消息内容中提取主题
+        # 找到第一行非空内容
+        lines = [line.strip() for line in message.split('\n') if line.strip()]
+        first_line = lines[0] if lines else "消息通知"
+        first_line = first_line.lstrip('#').strip()  # 移除标题标记
+        subject = f"消息通知 - {first_line}"
+        # 限制主题长度，避免过长
+        if len(subject) > 80:
+            subject = subject[:77] + "..."
+    
+    return {
+        "subject": subject,
+        "html": html_content
+    }
+# ===================================================================================
+# ========================== END: 新增区域 (需求：快速发送Markdown消息) ==========================
 
 
 # ===================================================================================
@@ -992,6 +1038,12 @@ custom_templates = {
         "meta": daily_file_report_meta,
         "func": get_daily_file_report_template
     },
+    # ========================== START: MODIFICATION (注册新模板) ==========================
+    "quick_message": {
+        "meta": quick_message_meta,
+        "func": get_quick_message_template
+    },
+    # ========================== END: MODIFICATION (注册新模板) ============================
     "monthly_learning_report": {
         "meta": monthly_learning_report_meta,
         "func": get_monthly_learning_report_template
