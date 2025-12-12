@@ -5,7 +5,7 @@
 *A flexible, template-driven email scheduling and sending toolkit with integrated AI capabilities.*  
 *一个集成了 AI 功能的、灵活的、模板驱动的邮件定时发送工具包。*
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.9+-blue.svg" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python 3.12+">
   <img src="https://img.shields.io/badge/Framework-FastAPI-green.svg" alt="FastAPI">
   <img src="https://img.shields.io/badge/UI-Gradio-orange.svg" alt="Gradio">
   <img src="https://img.shields.io/badge/Database-SQLite-blue.svg" alt="SQLite">
@@ -159,7 +159,7 @@ Follow these steps to get a local copy up and running.
 
 - **Git**: To clone the repository.
 - **Conda / Miniconda**: To manage the Python environment.
-- **Python 3.9** or newer.
+- **Python 3.12** or newer.
 
 #### Installation & Setup
 
@@ -171,8 +171,8 @@ Follow these steps to get a local copy up and running.
 
 2.  **Create and activate the Conda environment**
     ```sh
-    # Create an environment named 'EMinder_service' with Python 3.9
-    conda create --name EMinder_service python=3.9 -y
+    # Create an environment named 'EMinder_service' with Python 3.12
+    conda create --name EMinder_service python=3.12 -y
 
     # Activate the environment
     conda activate EMinder_service
@@ -379,7 +379,7 @@ EMinder/
 
 -   **Git**: 用于克隆本仓库。
 -   **Conda / Miniconda**: 用于管理 Python 环境。
--   **Python 3.9** 或更高版本。
+-   **Python 3.12** 或更高版本。
 
 #### 安装与配置
 
@@ -391,8 +391,8 @@ EMinder/
 
 2.  **创建并激活 Conda 环境**
     ```sh
-    # 创建一个名为 EMinder_service，使用 Python 3.9 的环境
-    conda create --name EMinder_service python=3.9 -y
+    # 创建一个名为 EMinder_service，使用 Python 3.12 的环境
+    conda create --name EMinder_service python=3.12 -y
 
     # 激活环境
     conda activate EMinder_service

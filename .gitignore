@@ -8,3 +8,6 @@ backend/eminder.db
 Procfile
 *.log
 tests/
+start_app.bat
+start_app_hidden.bat
+restart_EMinder.bat
