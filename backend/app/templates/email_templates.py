@@ -132,6 +132,14 @@ class TemplateManager:
             # 如果是普通 def 函数, 就直接调用
             email_parts = original_function(data)
         
+        # ========================== START: MODIFICATION (Fix Skip Email) ==========================
+        # DESIGNER'S NOTE: 
+        # 关键修正：如果模板返回了 abort_sending 标志，直接透传该字典。
+        # 不要继续往下执行 get_base_html，否则会生成一个“空壳”HTML并在没有内容的情况下发送。
+        if email_parts.get("abort_sending"):
+            return {"abort_sending": True}
+        # ========================== END: MODIFICATION (Fix Skip Email) ============================
+
         subject = email_parts.get("subject", "无主题")
         raw_html = email_parts.get("html", "")
         # 新增：获取附件列表，如果不存在则默认为空列表

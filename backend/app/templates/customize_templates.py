@@ -534,6 +534,10 @@ script_runner_meta = {
         "  \"subject\": \"自定义标题\",\n"
         "  \"content\": \"# 自定义正文。可以输入 **Markdown** 语法。\",\n"
         "  \"attachments\": [\"相对路径/file1.jpg\", \"D:/绝对路径/file2.log\"]\n"
+        "  \"skip_email\": true,              // [可选] 如果为 true，则完全不发送邮件（但脚本已运行）（默认false）\n"
+        "  \"show_execution_details\": false, // [可选] 是否显示命令、耗时等信息 (默认 true)\n"
+        "  \"show_logs\": false,              // [可选] 是否显示 stdout/stderr (默认 true)\n"
+        "  \"show_attachments_list\": false   // [可选] 是否在正文中列出附件清单 (默认 true)\n"
         "}\n"
         "~~~"
     ),
@@ -639,7 +643,18 @@ async def get_script_runner_template(data: dict) -> dict:
             exec_result['stderr'] += error_msg
             print(error_msg)
 
-    # 优先使用脚本配置的标题，否则使用 UI 模板生成的标题
+    # 1.1 处理“不发送邮件”逻辑
+    # 如果 json 中 skip_email 为 true，直接返回带 abort_sending 标志的字典
+    if script_meta.get("skip_email", False):
+        print(f"[EMinder Info] 脚本请求跳过本次邮件发送 (skip_email=True)。")
+        return {
+            "subject": "Skipped",
+            "html": "",
+            "attachments": [],
+            "abort_sending": True # 这个标志将被 TemplateManager 和 Scheduler 识别
+        }
+
+    # 1.2 处理标题
     if script_meta.get("subject"):
         subject = script_meta["subject"]
     else:
@@ -654,6 +669,11 @@ async def get_script_runner_template(data: dict) -> dict:
     
     # 【核心修正】将内容通过 convert_markdown_to_html 处理，以支持 Markdown 语法
     main_message = convert_markdown_to_html(raw_content)
+    
+    # 1.4 获取显示控制标志 (默认为 True)
+    show_details = script_meta.get("show_execution_details", True)
+    show_logs = script_meta.get("show_logs", True)
+    show_att_list = script_meta.get("show_attachments_list", True)
     
     # ========================== END: MODIFICATION (需求: Script Config) ============================
 
@@ -730,25 +750,28 @@ async def get_script_runner_template(data: dict) -> dict:
     # 使用处理后的正文消息 (HTML)
     html_parts.append(f"<div>{main_message}</div>")
 
-    html_parts.append(f"""
-        <h4>执行详情 📊</h4>
-        <ul>
-            <li><strong>命令:</strong> <code>{command}</code></li>
-            <li><strong>工作目录:</strong> <code>{abs_work_dir}</code></li>
-            <li><strong>状态:</strong> <span style="color: {status_color}; font-weight: bold;">{status_text} (返回码: {exec_result.get('return_code')})</span></li>
-            <li><strong>开始时间:</strong> {exec_result.get('start_time', 'N/A')}</li>
-            <li><strong>结束时间:</strong> {exec_result.get('end_time', 'N/A')}</li>
-            <li><strong>总耗时:</strong> {exec_result.get('duration_seconds', 'N/A')} 秒</li>
-        </ul>""")
+    # [控制] 执行详情
+    if show_details:
+        html_parts.append(f"""
+            <h4>执行详情 📊</h4>
+            <ul>
+                <li><strong>命令:</strong> <code>{command}</code></li>
+                <li><strong>工作目录:</strong> <code>{abs_work_dir}</code></li>
+                <li><strong>状态:</strong> <span style="color: {status_color}; font-weight: bold;">{status_text} (返回码: {exec_result.get('return_code')})</span></li>
+                <li><strong>开始时间:</strong> {exec_result.get('start_time', 'N/A')}</li>
+                <li><strong>结束时间:</strong> {exec_result.get('end_time', 'N/A')}</li>
+                <li><strong>总耗时:</strong> {exec_result.get('duration_seconds', 'N/A')} 秒</li>
+            </ul>""")
 
-    # 附件报告板块
-    if attachment_report_lines:
-        html_parts.append("<h4>📎 附件收集报告</h4>")
-        html_parts.append("<ul>" + "".join(attachment_report_lines) + "</ul>")
-        if found_attachments:
-             html_parts.append(f"<p><strong>共计发送 {len(found_attachments)} 个文件。</strong></p>")
-    elif attachment_rules_str or script_attachments:
-        html_parts.append("<h4>📎 附件收集报告</h4><p>未找到任何符合规则的文件。</p>")
+    # [控制] 附件报告
+    if show_att_list:
+        if attachment_report_lines:
+            html_parts.append("<h4>📎 附件收集报告</h4>")
+            html_parts.append("<ul>" + "".join(attachment_report_lines) + "</ul>")
+            if found_attachments:
+                 html_parts.append(f"<p><strong>共计发送 {len(found_attachments)} 个文件。</strong></p>")
+        elif attachment_rules_str or script_attachments:
+            html_parts.append("<h4>📎 附件收集报告</h4><p>未找到任何符合规则的文件。</p>")
 
     # --- (可选) LLM 总结 ---
     log_for_summary = exec_result.get('stdout') or exec_result.get('stderr')
@@ -764,17 +787,20 @@ async def get_script_runner_template(data: dict) -> dict:
             
         html_parts.append(f"<h4>智能日志摘要 📝</h4>{summary_html}")
 
-    # --- 添加日志输出 ---
-    if stdout_html:
-        html_parts.append(f"""
-        <h4>标准输出 (stdout) 📋</h4>
-        <pre style="white-space: pre-wrap; word-wrap: break-word; background-color: #f5f5f5; padding: 15px; border-radius: 8px;">{stdout_html}</pre>
-        """)
-    if stderr_html:
-        html_parts.append(f"""
-        <h4>标准错误 (stderr) ❗</h4>
-        <pre style="white-space: pre-wrap; word-wrap: break-word; background-color: #fbe9e7; color: #b71c1c; padding: 15px; border-radius: 8px;">{stderr_html}</pre>
-        """)
+    # [控制] 日志输出
+    if show_logs:
+        stdout_html = escape_html(exec_result.get('stdout', ''))
+        stderr_html = escape_html(exec_result.get('stderr', ''))
+        if stdout_html:
+            html_parts.append(f"""
+            <h4>标准输出 (stdout) 📋</h4>
+            <pre style="white-space: pre-wrap; word-wrap: break-word; background-color: #f5f5f5; padding: 15px; border-radius: 8px;">{stdout_html}</pre>
+            """)
+        if stderr_html:
+            html_parts.append(f"""
+            <h4>标准错误 (stderr) ❗</h4>
+            <pre style="white-space: pre-wrap; word-wrap: break-word; background-color: #fbe9e7; color: #b71c1c; padding: 15px; border-radius: 8px;">{stderr_html}</pre>
+            """)
 
     return {
         "subject": subject,

@@ -143,6 +143,17 @@ async def send_email_now(
     # TemplateManager 的包装器确保了所有模板都可以被 await
     email_content = await template_func(template_data)
     
+    # ========================== START: MODIFICATION (Fix Skip Email) ==========================
+    # DESIGNER'S NOTE: API 层也必须拦截 skip_email 标志
+    if email_content.get("abort_sending"):
+        # 清理用户上传的临时文件，因为不会发送了
+        for path in temp_file_paths:
+            background_tasks.add_task(os.remove, path)
+            
+        logger.info(f"'send-now' request processed. Template requested SKIP email. No email sent to {receiver_email}.")
+        return {"status": "success", "message": "任务逻辑已执行。根据脚本配置，本次邮件发送已跳过。"}
+    # ========================== END: MODIFICATION (Fix Skip Email) ============================
+    
     final_subject = custom_subject if custom_subject else email_content["subject"]
     
     # 将模板自身生成的附件路径与用户上传的临时文件路径合并

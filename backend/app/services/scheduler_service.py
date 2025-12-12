@@ -115,7 +115,15 @@ async def _send_custom_cron_email_task(**kwargs):
         # 检查模板函数是否为异步
         email_content = await template_func(data)
         
-        # 【修改】如果提供了自定义标题，则使用它；否则，使用模板的默认标题。
+        # ========================== START: MODIFICATION (Fix Skip Email) ==========================
+        # DESIGNER'S NOTE: 
+        # 核心检查点：如果模板逻辑决定不发送邮件（例如 eminder_meta.json 中 skip_email=true），
+        # 在这里拦截并直接返回，不再调用 send_email。
+        if email_content.get("abort_sending"):
+            logger.info(f"Cron job [ID: {job_id}]: 模板逻辑执行完毕，并主动请求【跳过】邮件发送 (abort_sending=True)。")
+            return
+        # ========================== END: MODIFICATION (Fix Skip Email) ============================
+        
         final_subject = custom_subject if custom_subject else email_content["subject"]
         
         # 从模板函数的返回结果中提取附件路径列表 (新)
@@ -196,6 +204,14 @@ class SchedulerService:
             template_func = getattr(template_manager, template_type, None)
             if template_func:
                 email_content = await template_func(data)
+                
+                # ========================== START: MODIFICATION (Fix Skip Email) ==========================
+                # 同样的检查点：拦截一次性任务的跳过请求
+                if email_content.get("abort_sending"):
+                    logger.info(f"One-time job [ID: {job_id}]: 模板逻辑执行完毕，并主动请求【跳过】邮件发送 (abort_sending=True)。")
+                    return
+                # ========================== END: MODIFICATION (Fix Skip Email) ============================
+
                 final_subject = custom_subject if custom_subject else email_content["subject"]
                 
                 # 将模板自身生成的附件与用户上传的临时文件附件合并
