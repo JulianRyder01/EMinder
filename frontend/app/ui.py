@@ -1,15 +1,8 @@
 # frontend/app/ui.py
-# ========================== START: MODIFICATION (Feature Addition & Bug Fix) ==========================
+# ========================== START: MODIFICATION (UI Component Change) ==========================
 # DESIGNER'S NOTE:
-# This file is dedicated to building the user interface. It defines the layout and
-# creates all the Gradio components, but contains no business logic. Each major UI section
-# (like a tab) is encapsulated in its own function, which returns a dictionary of the
-# interactive components that need to be accessed by the event handlers.
-#
-# CHANGES:
-# 1. create_job_management_tab: Added 'job_name_display' to show the name of the selected job.
-# 2. create_email_form: FIXED KeyError by adding 'dynamic_outputs' to the return dictionary.
-# 3. create_job_management_tab: FIXED InvalidComponentError by wrapping action Rows in Groups.
+# Modified `create_email_form` to replace the shared Dropdown with a Radio button list and a Textbox.
+# This aligns the visual style with the Cron tab while enforcing single-recipient logic.
 
 import gradio as gr
 import datetime
@@ -44,15 +37,22 @@ def create_subscriber_management_tab():
 
 def create_email_form(is_scheduled: bool):
     """
-    Builds the reusable form for sending or scheduling emails, starting from Step 2.
-    The receiver dropdown is now a shared component managed in main.py.
+    Builds the reusable form for sending or scheduling emails.
+    REMOVED: Reliance on external shared dropdown.
+    ADDED: Internal Radio and Textbox for receiver selection.
     """
-    gr.Markdown("### 1. 选择邮件模板")
+    # ========================== START: MODIFICATION (New Components) ==========================
+    gr.Markdown("### 1. 选择接收者")
+    subscriber_radio = gr.Radio(label="从订阅列表选择", choices=[], interactive=True)
+    custom_email_input = gr.Textbox(label="或者输入接收者邮箱", placeholder="user@example.com", info="如果填写此栏，将优先发送给此邮箱")
+    # ========================== END: MODIFICATION (New Components) ============================
+
+    gr.Markdown("### 2. 选择邮件模板")
     load_status = gr.Markdown()
     template_dd = gr.Dropdown(label="选择邮件模板", choices=["正在加载..."], interactive=False)
     custom_subject = gr.Textbox(label="自定义邮件标题 (可选)", info="留空则使用模板默认标题")
 
-    gr.Markdown("### 2. 填写模板所需信息")
+    gr.Markdown("### 3. 填写模板所需信息")
     with gr.Column(visible=False) as dynamic_form_area: # Initially hidden
         form_description = gr.Markdown()
         dynamic_fields_components = []
@@ -62,7 +62,7 @@ def create_email_form(is_scheduled: bool):
                 comp_num = gr.Number(label=f"字段{i+1}", visible=False)
             dynamic_fields_components.append({"group": field_group, "text": comp_text, "number": comp_num})
 
-    gr.Markdown("### 3. 添加附件 (可选)")
+    gr.Markdown("### 4. 添加附件 (可选)")
     attachment_state = gr.State([])
     with gr.Row():
         attachment_display = gr.Textbox(label="已选择的附件列表", interactive=False, lines=4)
@@ -70,10 +70,8 @@ def create_email_form(is_scheduled: bool):
         file_uploader = gr.File(label="点击选择或拖拽文件到此处添加", file_count="multiple", type="filepath")
         clear_attachments_btn = gr.Button("🗑️ 清空列表")
 
-    gr.Markdown("### 4. 执行操作")
-# ========================== START: MODIFICATION (需求 ①) ==========================
+    gr.Markdown("### 5. 执行操作")
     silent_run_checkbox = gr.Checkbox(label="静默运行", info="勾选后，任务将正常执行（包括脚本运行、文件归档等），但不会发送邮件。")
-# ========================== END: MODIFICATION (需求 ①) ============================
     if is_scheduled:
         now_plus_10 = (datetime.datetime.now() + datetime.timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M")
         send_at_input = gr.Textbox(label="预定发送时间", value=now_plus_10, info="格式: YYYY-MM-DD HH:MM")
@@ -89,17 +87,17 @@ def create_email_form(is_scheduled: bool):
     # Collect all dynamic field inputs for the handler
     all_field_inputs = [c for d in dynamic_fields_components for c in (d['text'], d['number'])]
     
-    # ========================== START: BUG FIX (Missing Key) ==========================
-    # DESIGNER'S NOTE: Calculate the list of outputs that need to be updated when template changes.
-    # This list allows main.py to toggle visibility of all dynamic fields at once.
+    # List of outputs to toggle visibility
     dynamic_outputs = [dynamic_form_area, form_description] + [comp for d in dynamic_fields_components for comp in d.values()]
-    # ========================== END: BUG FIX ============================
 
     components = {
+        # ========================== START: MODIFICATION (Return New Components) ==========================
+        "subscriber_radio": subscriber_radio,
+        "custom_email_input": custom_email_input,
+        # ========================== END: MODIFICATION ============================
         "load_status": load_status, "template_dd": template_dd, "custom_subject": custom_subject,
         "dynamic_form_area": dynamic_form_area, "form_description": form_description,
         "dynamic_fields": dynamic_fields_components, "all_field_inputs": all_field_inputs,
-        # Key added here to fix KeyError in main.py
         "dynamic_outputs": dynamic_outputs, 
         "attachment_state": attachment_state, "attachment_display": attachment_display,
         "file_uploader": file_uploader, "clear_attachments_btn": clear_attachments_btn,
@@ -174,18 +172,8 @@ def create_job_management_tab():
             with gr.Column(scale=2):
                 with gr.Group():
                     gr.Markdown("### 操作选中任务")
-                    # ========================== START: MODIFICATION (需求：显示任务名称) ==========================
-                    # DESIGNER'S NOTE: 新增一个只读文本框，用于在操作区显示当前选中任务的名称，方便用户确认。
                     job_name_display = gr.Textbox(label="任务名称", interactive=False)
-                    # ========================== END: MODIFICATION ============================
                     job_id_input = gr.Textbox(label="要操作的任务ID (自动填充)")
-                    
-                    # ========================== START: MODIFICATION (Fix InvalidComponentError) ==========================
-                    # DESIGNER'S NOTE: 
-                    # Changed 'gr.Row' to 'gr.Group' for the action containers.
-                    # 'gr.Group' is a robust container that supports visibility updates in all Gradio versions,
-                    # whereas 'gr.Row' as an output component can be problematic.
-                    # We keep the gr.Row INSIDE the Group to maintain the horizontal layout of buttons.
                     
                     with gr.Group(visible=True) as default_action_group:
                         with gr.Row():
@@ -238,9 +226,7 @@ def create_job_management_tab():
 
     components = {
         "tab": tab, "refresh_btn": refresh_btn, "status_output": status_output, "dataframe": dataframe,
-        # ========================== START: MODIFICATION ==========================
-        "job_name_display": job_name_display, # 返回新组件
-        # ========================== END: MODIFICATION ============================
+        "job_name_display": job_name_display, 
         "job_id_input": job_id_input, "cancel_btn": cancel_btn, "run_now_btn": run_now_btn, "cancel_status": cancel_status,
         "edit_column": edit_column, "edit_id_state": edit_id_state, "edit_type_state": edit_type_state,
         "edit_cron_group": edit_cron_group, "edit_cron_name": edit_cron_name, "edit_cron_string": edit_cron_string,
@@ -250,10 +236,7 @@ def create_job_management_tab():
         "edit_dynamic_area": edit_dynamic_area, "edit_form_desc": edit_form_desc,
         "edit_dynamic_fields": edit_dynamic_fields, "edit_all_field_inputs": edit_all_field_inputs,
         "update_btn": update_btn, "cancel_edit_btn": cancel_edit_btn, "update_status": update_status,
-# ========================== START: MODIFICATION (需求 ①) ==========================
         "edit_silent_run_checkbox": edit_silent_run_checkbox,
-        
-        # New components for confirmation UI (Using Groups now)
         "confirm_yes_btn": confirm_yes_btn, "confirm_no_btn": confirm_no_btn,
         "default_action_row": default_action_group, 
         "confirm_action_row": confirm_action_group,

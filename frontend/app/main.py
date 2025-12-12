@@ -28,13 +28,9 @@ def main():
         backend_status = gr.Markdown()
         gr.Markdown("# EMinder 邮件任务控制中心")
 
-        # Create the single, shared dropdown here, outside the tabs.
-        shared_receiver_dd = gr.Dropdown(
-            label="1. 选择或输入接收者邮箱",
-            info="适用于'手动发送'和'定时单次任务'",
-            allow_custom_value=True,
-            interactive=True
-        )
+        # ========================== START: MODIFICATION ==========================
+        # DESIGNER'S NOTE: Removed the shared dropdown. Components are now local to their tabs.
+        # ========================== END: MODIFICATION ============================
 
         # --- 2. Build UI from Tabs ---
         with gr.Tabs() as tabs:
@@ -71,10 +67,11 @@ def main():
         # Initial data loading for subscribers
         sub_refresh_outputs = [
             sub_ui["dataframe"], sub_ui["status_output"], 
-            shared_receiver_dd,             
+            manual_ui["subscriber_radio"], # Target new radio in Manual tab
+            schedule_ui["subscriber_radio"], # Target new radio in Schedule tab
             cron_ui["receiver_subscribers"],
-            jobs_ui["edit_date_receiver"],
-            jobs_ui["edit_cron_subscribers"] # <--- ADDED: This is the fix for the broken component in Edit Job tab
+            jobs_ui["edit_cron_subscribers"],
+            jobs_ui["edit_date_receiver"]
         ]
         
         # 在应用加载时也执行一次订阅者刷新
@@ -110,7 +107,16 @@ def main():
             form_ui["clear_attachments_btn"].click(lambda: ([], ""), outputs=[form_ui["attachment_state"], form_ui["attachment_display"]])
             form_ui["action_btn"].click(
                 handlers.send_or_schedule_email,
-                inputs=[form_ui["action_type"], shared_receiver_dd, form_ui["template_dd"], form_ui["custom_subject"], form_ui["send_at_input"], form_ui["silent_run_checkbox"], form_ui["attachment_state"]] + form_ui["all_field_inputs"],
+                inputs=[
+                    form_ui["action_type"], 
+                    form_ui["subscriber_radio"], # New input 1
+                    form_ui["custom_email_input"], # New input 2
+                    form_ui["template_dd"], 
+                    form_ui["custom_subject"], 
+                    form_ui["send_at_input"], 
+                    form_ui["silent_run_checkbox"], 
+                    form_ui["attachment_state"]
+                ] + form_ui["all_field_inputs"],
                 outputs=form_ui["output_text"]
             ).then(handlers.navigate_on_success, inputs=form_ui["output_text"], outputs=tabs).then(handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]])
             

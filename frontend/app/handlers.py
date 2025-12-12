@@ -92,27 +92,27 @@ def refresh_subscribers_list():
         df = pd.DataFrame(subs, columns=["email", "remark_name"]).rename(columns={"email": "邮箱地址", "remark_name": "备注名"}) if subs else pd.DataFrame(columns=["邮箱地址", "备注名"])
         msg = f"✅ 订阅列表已于 {datetime.datetime.now().strftime('%H:%M:%S')} 刷新。"
         
-        # 统一的组件更新对象 (更新选项列表，但不强制重置当前选中的值，以免用户正在操作时被打断)
-        # 注意: 对于 value=None，如果希望刷新时保留用户已选值，可以去掉 value=None，但这里为了确保选项一致性，通常重置或仅更新choices。
-        # 这里我们使用 gr.update(choices=..., value=None) 来确保没有无效选项残留。
-        comp_update = gr.update(choices=state.SUBSCRIBER_CHOICES, value=None)
-
-        # 必须返回 6 个值，对应 main.py 中的 outputs 列表:
-        # 1. sub_ui["dataframe"]
-        # 2. sub_ui["status_output"]
-        # 3. shared_receiver_dd (手动/单次发送)
-        # 4. cron_ui["receiver_subscribers"] (创建周期任务)
-        # 5. jobs_ui["edit_date_receiver"] (编辑单次任务)
-        # 6. jobs_ui["edit_cron_subscribers"] (编辑周期任务) <--- 修复点：添加此项
-        return df, msg, comp_update, comp_update, comp_update, comp_update
+        # ========================== START: MODIFICATION (Logic Update) ==========================
+        # DESIGNER'S NOTE:
+        # Updated to refresh the new Radio buttons in Manual and Schedule tabs,
+        # in addition to the CheckboxGroups in Cron and Edit tabs.
+        # Outputs: 1.df, 2.msg, 3.manual_radio, 4.schedule_radio, 5.cron_check, 6.edit_cron_check, 7.edit_date_dropdown
+        
+        return df, msg, \
+               gr.update(choices=state.SUBSCRIBER_CHOICES, value=None), \
+               gr.update(choices=state.SUBSCRIBER_CHOICES, value=None), \
+               gr.update(choices=state.SUBSCRIBER_CHOICES), \
+               gr.update(choices=state.SUBSCRIBER_CHOICES), \
+               gr.update(choices=state.SUBSCRIBER_CHOICES)
+        # ========================== END: MODIFICATION ============================
 
     except requests.RequestException as e:
         msg = f"🔴 获取订阅列表失败: {e}"
         gr.Warning(msg)
-        empty_df = pd.DataFrame(columns=["邮箱地址", "备注名"])
-        empty_update = gr.update(choices=[], value=None)
-        # 异常路径同样需要返回 6 个值
-        return empty_df, msg, empty_update, empty_update, empty_update, empty_update
+        return pd.DataFrame(columns=["邮箱地址", "备注名"]), msg, \
+               gr.update(choices=[], value=None), gr.update(choices=[], value=None), \
+               gr.update(choices=[], value=None), gr.update(choices=[], value=None), \
+               gr.update(choices=[], value=None)
 
 def handle_add_subscriber(email, remark_name):
     """Callback for adding or updating a subscriber."""
@@ -188,35 +188,18 @@ def ask_confirm_cancel_job(job_id_to_cancel: str):
     Hides default buttons, shows confirm buttons.
     """
     if not job_id_to_cancel or not job_id_to_cancel.strip():
-        gr.Warning("请先从列表中选择一个任务！")
-        return gr.update(), gr.update()
-    
-    # Show confirmation row, Hide default row
-    return gr.update(visible=False), gr.update(visible=True)
-
-def cancel_cancel_op():
-    """Called when user clicks "No/Cancel" in the confirmation row."""
-    # Show default row, Hide confirmation row
-    return gr.update(visible=True), gr.update(visible=False)
-
-def execute_cancel_job(job_id_to_cancel: str):
-    """Called when user clicks "Yes" to confirm cancellation."""
-    if not job_id_to_cancel: return "未选择ID", gr.update(visible=True), gr.update(visible=False)
-
+        gr.Warning("请输入有效的任务ID！")
+        return "请输入任务ID。"
     try:
         response = api_client.cancel_job(job_id_to_cancel)
         msg = response.get("message", "任务已取消")
         gr.Info(msg)
-        # Restore buttons to default state
-        return msg, gr.update(visible=True), gr.update(visible=False)
+        return msg
     except requests.RequestException as e:
         error_detail = e.response.json().get('detail', '未知错误')
         gr.Warning(f"操作失败: {error_detail}")
-        return f"操作失败: {error_detail}", gr.update(visible=True), gr.update(visible=False)
+        return f"操作失败: {error_detail}"
 
-# ========================== START: MODIFICATION (需求 ②：UI重置) ==========================
-# DESIGNER'S NOTE: 新增此函数，用于在删除任务后清空操作区和编辑区的所有状态。
-# 这防止了UI“卡住”显示旧数据的问题。
 def reset_job_selection_ui():
     """
     Clears all job selection inputs and hides the edit column.
@@ -229,9 +212,39 @@ def reset_job_selection_ui():
         gr.update(value="操作已完成，请选择新任务") # cancel_status
     ]
 
-def send_or_schedule_email(action, receiver_selection, template_choice, custom_subject, send_at, silent_run, attachment_files_list, *dynamic_field_values):
-    """Callback to handle both 'send now' and 'schedule once' actions."""
-    receiver_email = get_email_from_selection(receiver_selection)
+def ask_confirm_cancel_job(job_id_to_cancel: str):
+    """Hides default buttons, shows confirm buttons."""
+    if not job_id_to_cancel or not job_id_to_cancel.strip():
+        gr.Warning("请先从列表中选择一个任务！")
+        return gr.update(), gr.update()
+    return gr.update(visible=False), gr.update(visible=True)
+
+def cancel_cancel_op():
+    """Called when user clicks "No/Cancel" in the confirmation row."""
+    return gr.update(visible=True), gr.update(visible=False)
+
+def execute_cancel_job(job_id_to_cancel: str):
+    """Called when user clicks "Yes" to confirm cancellation."""
+    if not job_id_to_cancel: return "未选择ID", gr.update(visible=True), gr.update(visible=False)
+    try:
+        response = api_client.cancel_job(job_id_to_cancel)
+        msg = response.get("message", "任务已取消")
+        gr.Info(msg)
+        return msg, gr.update(visible=True), gr.update(visible=False)
+    except requests.RequestException as e:
+        error_detail = e.response.json().get('detail', '未知错误')
+        gr.Warning(f"操作失败: {error_detail}")
+        return f"操作失败: {error_detail}", gr.update(visible=True), gr.update(visible=False)
+
+# ========================== START: MODIFICATION (Logic Update) ==========================
+def send_or_schedule_email(action, radio_selection, custom_email, template_choice, custom_subject, send_at, silent_run, attachment_files_list, *dynamic_field_values):
+    """
+    Callback to handle both 'send now' and 'schedule once' actions.
+    MODIFIED: Accepts radio selection and custom email text as separate inputs.
+    """
+    # Logic: Prefer custom email if provided, otherwise use selection from radio button.
+    receiver_email = custom_email.strip() if custom_email else get_email_from_selection(radio_selection)
+    
     if not receiver_email or not template_choice:
         gr.Warning("错误：接收者邮箱和模板类型为必填项。")
         return "错误：接收者邮箱和模板类型为必填项。"
@@ -436,10 +449,8 @@ def on_select_job(df_input: pd.DataFrame, evt: gr.SelectData):
         return [gr.update()] * TOTAL_EDIT_OUTPUTS
 
     job_id = df_input.iloc[evt.index[0]]['任务ID']
-# ========================== START: MODIFICATION (需求 ①) ==========================
     # 获取任务名称
     job_name_val = df_input.iloc[evt.index[0]]['任务名称']
-# ========================== END: MODIFICATION (需求 ①) ============================
     
     try:
         job = api_client.get_job_details(job_id)
@@ -528,8 +539,6 @@ def on_select_job(df_input: pd.DataFrame, evt: gr.SelectData):
     except requests.RequestException as e:
         gr.Error(f"获取任务详情失败: {e}")
         return [gr.update()] * TOTAL_EDIT_OUTPUTS
-
-# ========================== END: MODIFICATION (File Splitting) ============================
 
 def refresh_llm_configs():
     """回调函数：从后端获取并刷新LLM配置列表。"""
@@ -639,5 +648,3 @@ def handle_set_active_llm_config(config_id: int):
         error_detail = e.response.json().get('detail', str(e)) if e.response else str(e)
         gr.Error(f"设置失败: {error_detail}")
         return f"设置失败: {error_detail}"
-
-# ========================== END: MODIFICATION ============================
