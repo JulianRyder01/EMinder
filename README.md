@@ -19,13 +19,32 @@
 You can run EMinder in one click with Conda!  
 您可以用 Conda 一键启动 EMinder！
 
-> Windows：  
-Clone the repository and run the `one_click_start_windows.bat` script.  
-克隆本项目，并运行 `one_click_start_windows.bat` 脚本。
-
-> Linux：  
-Clone the repository and run the `bash one_click_start_linux.sh` in the project directory.  
-克隆本项目，并在项目目录下运行 `bash one_click_start_linux.sh`。
+> ## Step1:
+> Clone the repository and enter the `backend` directory. Create a `.env` file and fill in the following information, replacing the `example` information with your own:
+> 克隆本项目，进入`EMinder/backend`目录，创建一个`.env`文件，填写如下信息，注意替换带有`example`的信息：
+> ```env
+> # --- SMTP Server Configuration ---
+> # Examples: email1|app_password1,email2|app_password2
+> SENDER_ACCOUNTS="example_email|example_app_password"
+> 
+> SMTP_SERVER="smtp.example.com" # change to your SMTP server
+> SMTP_PORT=465
+> 
+> # --- 【核心修正】新增数据库URL配置 ---
+> # 这个路径是相对于 backend 目录的。Alembic 和 APScheduler 都会读取它。
+> DATABASE_URL="sqlite:///./eminder.db"
+> ```
+> ## Step2:
+> 
+> ### Windows：  
+> run the `one_click_start_windows.bat` script.  
+> 运行 `one_click_start_windows.bat` 脚本。
+> 
+> ### Linux：  
+> run the `bash one_click_start_linux.sh` in the project directory.  
+> 在项目目录下运行 `bash one_click_start_linux.sh`。
+>
+> This will create an Conda env named `EMinder_service` and automatically install the dependencies.
 
 # Manual of EMinder 使用手册
 <p align="center">

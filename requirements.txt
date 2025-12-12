@@ -9,3 +9,4 @@ python-multipart
 croniter
 aiosmtplib==4.0.2
 honcho
+SQLAlchemy

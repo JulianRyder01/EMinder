@@ -40,14 +40,9 @@ if %ERRORLEVEL% EQU 0 (
     echo [INFO] Environment not found. Creating '%ENV_NAME%' (Python %PYTHON_VERSION%.
     echo ---------------------------------------------------
     call conda create -n %ENV_NAME% python=%PYTHON_VERSION% -y
-    if %ERRORLEVEL% NEQ 0 (
-        echo.
-        echo [ERROR] Failed to create environment. Check internet connection or Conda config.
-        pause
-        exit /b 1
-    )
+
     echo ---------------------------------------------------
-    echo [INFO] Environment created successfully.
+    echo [INFO] Environment created.
 )
 
 :: ---------------------------------------------------------
