@@ -163,6 +163,15 @@ def create_job_management_tab():
     """Builds the UI for the 'Job Management' tab, including the job list and edit form."""
     with gr.TabItem("📅 计划任务管理", id="jobs_tab") as tab:
         gr.Markdown("## 查看并管理所有已计划的邮件任务")
+        
+        # ========================== START: MODIFICATION (Gantt Chart UI) ==========================
+        # DESIGNER'S NOTE: 
+        # 新增一个 Markdown 组件用于显示 Mermaid Gantt 图。
+        # 放在控制按钮下方，表格上方，作为直观的时间线概览。
+        with gr.Row():
+            gantt_chart = gr.Markdown(visible=True)
+        # ========================== END: MODIFICATION (Gantt Chart UI) ============================
+
         with gr.Row():
             refresh_btn = gr.Button("🔄 刷新任务列表", variant="primary")
         status_output = gr.Markdown()
@@ -175,10 +184,14 @@ def create_job_management_tab():
                     job_name_display = gr.Textbox(label="任务名称", interactive=False)
                     job_id_input = gr.Textbox(label="要操作的任务ID (自动填充)")
                     
+                    # ========================== FIX: Restore the Group Wrapper ==========================
                     with gr.Group(visible=True) as default_action_group:
                         with gr.Row():
                             cancel_btn = gr.Button("🗑️ 取消任务", variant="stop")
                             run_now_btn = gr.Button("▶️ 立即运行", variant="secondary")
+                    # ===================================================================================
+                    
+                    cancel_status = gr.Textbox(label="操作结果", interactive=False)
                     
                     with gr.Group(visible=False) as confirm_action_group:
                         with gr.Row():
@@ -226,6 +239,9 @@ def create_job_management_tab():
 
     components = {
         "tab": tab, "refresh_btn": refresh_btn, "status_output": status_output, "dataframe": dataframe,
+        # ========================== START: MODIFICATION ==========================
+        "gantt_chart": gantt_chart, # Export the new component
+        # ========================== END: MODIFICATION ============================
         "job_name_display": job_name_display, 
         "job_id_input": job_id_input, "cancel_btn": cancel_btn, "run_now_btn": run_now_btn, "cancel_status": cancel_status,
         "edit_column": edit_column, "edit_id_state": edit_id_state, "edit_type_state": edit_type_state,

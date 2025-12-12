@@ -52,6 +52,97 @@ def navigate_on_success(message: str):
         return gr.update(selected="jobs_tab")
     return gr.update()
 
+# ========================== START: MODIFICATION (Gantt Logic) ==========================
+# DESIGNER'S NOTE: 
+# Helper function to generate Mermaid Gantt chart syntax from job list.
+def generate_gantt_chart(jobs_list: list) -> str:
+    """
+    Constructs a Mermaid Gantt chart string visualizing the schedule.
+    It shows 'Now' as a reference milestone and plots each job's next run time.
+    """
+    if not jobs_list:
+        return "暂无计划任务数据。"
+
+    # 1. Get Current Time
+    now = datetime.datetime.now()
+    now_str = now.strftime('%Y-%m-%d %H:%M')
+    now_label = now.strftime('%H:%M')
+    
+    # 2. Prepare Data
+    mermaid_lines = []
+    
+    # Sort jobs by next_run_time to make the chart readable
+    # Helper to parse ISO time safely
+    def parse_time(t_str):
+        if not t_str: return datetime.datetime.max
+        try:
+            return datetime.datetime.fromisoformat(t_str.replace('Z', '+00:00'))
+        except:
+            return datetime.datetime.max
+
+    sorted_jobs = sorted(jobs_list, key=lambda x: parse_time(x.get('next_run_time')))
+
+    # 3. Build Mermaid String Line by Line (Strict Formatting)
+    lines = [""]
+    lines.append("```mermaid")
+    lines.append("gantt")
+    lines.append("title 任务执行时间线")
+    lines.append("dateFormat YYYY-MM-DD HH:mm")
+    lines.append("axisFormat %m-%d %H:%M")
+    lines.append("")
+    lines.append("section 当前时间")
+    # Wrap label in quotes just in case
+    lines.append(f'NOW : milestone, m_now, {now_str}, 0m')
+    lines.append("")
+    lines.append("section 计划任务")
+
+    for job in sorted_jobs:
+        raw_time = job.get('next_run_time')
+        if not raw_time:
+            continue
+            
+        try:
+            # Parse and format to Mermaid's expected input format
+            dt = datetime.datetime.fromisoformat(raw_time.replace('Z', '+00:00'))
+            
+            # Convert to local time string for the label if needed, 
+            # but Mermaid needs the exact date format defined in dateFormat
+            # Assuming backend timezone is handled, we use the timestamp as is but strip timezone offset for Mermaid parsing if needed
+            # (Mermaid handles simple date strings best)
+            run_time_fmt = dt.strftime('%Y-%m-%d %H:%M')
+            
+            # 核心修复：清洗任务名称
+            # 1. 使用正则只保留 中文、英文、数字、空格、连字符
+            # 2. 移除 Emoji 和特殊标点 (如 🏃‍, (), ——)
+            original_name = job['name'].replace('"', "'").replace('\n', ' ')
+            safe_name = re.sub(r'[^\w\u4e00-\u9fa5 \-]+', '', original_name)
+            
+            # 3. 压缩多余空格
+            safe_name = re.sub(r'\s+', ' ', safe_name).strip()
+            
+            # 4. 兜底处理：如果清洗后为空，使用ID
+            if not safe_name: 
+                safe_name = f"Job-{job['id'][:6]}"
+            
+            # 5. 截断长度，防止过长破坏图表
+            if len(safe_name) > 20: 
+                safe_name = safe_name[:18] + ".."
+            
+            # Syntax: Task Name : milestone, id, start_time, duration
+            # We use milestone for point-in-time events
+            line = f'"{safe_name}" : milestone, {job["id"]}, {run_time_fmt}, 0m'
+            lines.append(line)
+            
+        except Exception:
+            continue
+
+    lines.append("```")
+    lines.append("")
+    
+    # Join with newlines to form the final markdown string
+    return "\n".join(lines)
+# ========================== END: MODIFICATION (Gantt Logic Fix) ============================
+
 # --- Gradio Callback Handlers ---
 
 def check_backend_status():
@@ -92,19 +183,13 @@ def refresh_subscribers_list():
         df = pd.DataFrame(subs, columns=["email", "remark_name"]).rename(columns={"email": "邮箱地址", "remark_name": "备注名"}) if subs else pd.DataFrame(columns=["邮箱地址", "备注名"])
         msg = f"✅ 订阅列表已于 {datetime.datetime.now().strftime('%H:%M:%S')} 刷新。"
         
-        # ========================== START: MODIFICATION (Logic Update) ==========================
-        # DESIGNER'S NOTE:
-        # Updated to refresh the new Radio buttons in Manual and Schedule tabs,
-        # in addition to the CheckboxGroups in Cron and Edit tabs.
-        # Outputs: 1.df, 2.msg, 3.manual_radio, 4.schedule_radio, 5.cron_check, 6.edit_cron_check, 7.edit_date_dropdown
-        
+        # Returns updates for: dataframe, status message, manual send dropdown, cron job checkboxes, job edit dropdown
         return df, msg, \
                gr.update(choices=state.SUBSCRIBER_CHOICES, value=None), \
                gr.update(choices=state.SUBSCRIBER_CHOICES, value=None), \
                gr.update(choices=state.SUBSCRIBER_CHOICES), \
                gr.update(choices=state.SUBSCRIBER_CHOICES), \
                gr.update(choices=state.SUBSCRIBER_CHOICES)
-        # ========================== END: MODIFICATION ============================
 
     except requests.RequestException as e:
         msg = f"🔴 获取订阅列表失败: {e}"
@@ -144,8 +229,12 @@ def get_jobs_list():
     columns = ["任务ID", "任务名称", "类型", "下次运行时间", "发送目标"]
     try:
         jobs = api_client.get_jobs()
+        
+        # Generate Gantt Chart using the fixed function
+        gantt_str = generate_gantt_chart(jobs)
+        
         if not jobs:
-            return pd.DataFrame([], columns=columns), "✅ 暂无计划中的任务。"
+            return pd.DataFrame([], columns=columns), "✅ 暂无计划中的任务。", gantt_str
         
         formatted_data = []
         for job in jobs:
@@ -175,42 +264,12 @@ def get_jobs_list():
             })
         
         df = pd.DataFrame(formatted_data, columns=columns)
-        return df, f"✅ 任务列表已于 {datetime.datetime.now().strftime('%H:%M:%S')} 刷新。"
+        # Returns dataframe, status message, AND the Gantt chart markdown string
+        return df, f"✅ 任务列表已于 {datetime.datetime.now().strftime('%H:%M:%S')} 刷新。", gantt_str
     except requests.RequestException as e:
         msg = f"🔴 获取任务列表失败: {e}"
         gr.Warning(msg)
-        return pd.DataFrame([], columns=columns), msg
-
-# ========================== START: MODIFICATION (Fix Cancel UI) ==========================
-def ask_confirm_cancel_job(job_id_to_cancel: str):
-    """
-    Called when user clicks "Cancel Task".
-    Hides default buttons, shows confirm buttons.
-    """
-    if not job_id_to_cancel or not job_id_to_cancel.strip():
-        gr.Warning("请输入有效的任务ID！")
-        return "请输入任务ID。"
-    try:
-        response = api_client.cancel_job(job_id_to_cancel)
-        msg = response.get("message", "任务已取消")
-        gr.Info(msg)
-        return msg
-    except requests.RequestException as e:
-        error_detail = e.response.json().get('detail', '未知错误')
-        gr.Warning(f"操作失败: {error_detail}")
-        return f"操作失败: {error_detail}"
-
-def reset_job_selection_ui():
-    """
-    Clears all job selection inputs and hides the edit column.
-    To be called after a successful deletion.
-    """
-    return [
-        gr.update(value=""),  # job_id_input
-        gr.update(value=""),  # job_name_display
-        gr.update(visible=False), # edit_column
-        gr.update(value="操作已完成，请选择新任务") # cancel_status
-    ]
+        return pd.DataFrame([], columns=columns), msg, ""
 
 def ask_confirm_cancel_job(job_id_to_cancel: str):
     """Hides default buttons, shows confirm buttons."""
@@ -236,7 +295,18 @@ def execute_cancel_job(job_id_to_cancel: str):
         gr.Warning(f"操作失败: {error_detail}")
         return f"操作失败: {error_detail}", gr.update(visible=True), gr.update(visible=False)
 
-# ========================== START: MODIFICATION (Logic Update) ==========================
+def reset_job_selection_ui():
+    """
+    Clears all job selection inputs and hides the edit column.
+    To be called after a successful deletion.
+    """
+    return [
+        gr.update(value=""),  # job_id_input
+        gr.update(value=""),  # job_name_display
+        gr.update(visible=False), # edit_column
+        gr.update(value="操作已完成，请选择新任务") # cancel_status
+    ]
+
 def send_or_schedule_email(action, radio_selection, custom_email, template_choice, custom_subject, send_at, silent_run, attachment_files_list, *dynamic_field_values):
     """
     Callback to handle both 'send now' and 'schedule once' actions.

@@ -3,11 +3,9 @@ uvicorn[standard]
 python-dotenv
 apscheduler
 requests
-gradio==4.44.1
+gradio==6.1.0
 gunicorn
 python-multipart
-huggingface_hub==0.20.3
 croniter
 aiosmtplib==4.0.2
-pydantic[email]==2.1.1
 honcho

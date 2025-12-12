@@ -4,20 +4,33 @@
 
 *A flexible, template-driven email scheduling and sending toolkit with integrated AI capabilities.*  
 *一个集成了 AI 功能的、灵活的、模板驱动的邮件定时发送工具包。*
-
-</div>
-
-<p align="center">
-  <a href="#english">English</a> •
-  <a href="#中文">中文</a>
-</p>
-
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.9+-blue.svg" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/Framework-FastAPI-green.svg" alt="FastAPI">
   <img src="https://img.shields.io/badge/UI-Gradio-orange.svg" alt="Gradio">
   <img src="https://img.shields.io/badge/Database-SQLite-blue.svg" alt="SQLite">
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT">
+</p>
+
+![alt text](image.png)
+
+</div>
+
+You can run EMinder in one click with Conda!  
+您可以用 Conda 一键启动 EMinder！
+
+> Windows：  
+Clone the repository and run the `one_click_start_windows.bat` script.  
+克隆本项目，并运行 `one_click_start_windows.bat` 脚本。
+
+> Linux：  
+Clone the repository and run the `one_click_start_linux.sh` script.  
+克隆本项目，并运行 `one_click_start_linux.sh` 脚本。
+
+# Manual of EMinder 使用手册
+<p align="center">
+  <a href="#english">English</a> •
+  <a href="#中文">中文</a>
 </p>
 
 ---
@@ -30,6 +43,7 @@
 <summary><strong>Table of Contents</strong></summary>
 
 - [EMinder ✨](#eminder-)
+- [Manual of EMinder 使用手册](#manual-of-eminder-使用手册)
   - [🇬🇧 English](#-english)
     - [About The Project](#about-the-project)
     - [Key Features](#key-features)

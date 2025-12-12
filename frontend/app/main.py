@@ -97,6 +97,11 @@ def main():
         cron_ui["template_dd"].change(partial(handlers.toggle_template_fields, ui.MAX_FIELDS), inputs=cron_ui["template_dd"], outputs=cron_dynamic_outputs)
         jobs_ui["edit_template_dd"].change(partial(handlers.toggle_template_fields, ui.MAX_FIELDS), inputs=jobs_ui["edit_template_dd"], outputs=edit_dynamic_outputs)
         
+        # ========================== START: MODIFICATION (Gantt Chart Update) ==========================
+        # DESIGNER'S NOTE: Define common outputs for job list refreshing, now including the gantt_chart.
+        job_list_outputs = [jobs_ui["dataframe"], jobs_ui["status_output"], jobs_ui["gantt_chart"]]
+        # ========================== END: MODIFICATION (Gantt Chart Update) ============================
+
         # Manual & Schedule Once Form Events
         for form_ui in [manual_ui, schedule_ui]:
             form_ui["file_uploader"].upload(
@@ -118,18 +123,22 @@ def main():
                     form_ui["attachment_state"]
                 ] + form_ui["all_field_inputs"],
                 outputs=form_ui["output_text"]
-            ).then(handlers.navigate_on_success, inputs=form_ui["output_text"], outputs=tabs).then(handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]])
+            ).then(handlers.navigate_on_success, inputs=form_ui["output_text"], outputs=tabs).then(handlers.get_jobs_list, outputs=job_list_outputs) # Updated Output
             
         # Schedule Cron Job Tab Events
         cron_ui["create_btn"].click(
             handlers.handle_schedule_cron,
             inputs=[cron_ui["job_name"], cron_ui["cron_string"], cron_ui["receiver_subscribers"], cron_ui["receiver_custom"], cron_ui["template_dd"], cron_ui["custom_subject"], cron_ui["silent_run_checkbox"]] + cron_ui["all_field_inputs"],
             outputs=cron_ui["output_text"]
-        ).then(handlers.navigate_on_success, inputs=cron_ui["output_text"], outputs=tabs).then(handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]])
+        ).then(handlers.navigate_on_success, inputs=cron_ui["output_text"], outputs=tabs).then(handlers.get_jobs_list, outputs=job_list_outputs) # Updated Output
         
         # Job Management Tab Events
-        jobs_ui["tab"].select(handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]])
-        jobs_ui["refresh_btn"].click(handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]])
+        # ========================== START: MODIFICATION (Gantt Wiring) ==========================
+        # DESIGNER'S NOTE: Wired tab selection and refresh button to update the Gantt chart.
+        jobs_ui["tab"].select(handlers.get_jobs_list, outputs=job_list_outputs)
+        jobs_ui["refresh_btn"].click(handlers.get_jobs_list, outputs=job_list_outputs)
+        # ========================== END: MODIFICATION (Gantt Wiring) ============================
+        
         jobs_ui["cancel_btn"].click(
             handlers.ask_confirm_cancel_job, 
             inputs=[jobs_ui["job_id_input"]], 
@@ -142,7 +151,7 @@ def main():
             inputs=[jobs_ui["job_id_input"]],
             outputs=[jobs_ui["cancel_status"], jobs_ui["default_action_row"], jobs_ui["confirm_action_row"]]
         ).then(
-            handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]]
+            handlers.get_jobs_list, outputs=job_list_outputs # Updated Output
         ).then(
             handlers.reset_job_selection_ui,
             outputs=[jobs_ui["job_id_input"], jobs_ui["job_name_display"], jobs_ui["edit_column"], jobs_ui["cancel_status"]]
@@ -189,7 +198,7 @@ def main():
         jobs_ui["update_btn"].click(
             handlers.handle_update_job, inputs=edit_form_inputs_list, outputs=jobs_ui["update_status"]
         ).then(
-            handlers.get_jobs_list, outputs=[jobs_ui["dataframe"], jobs_ui["status_output"]]
+            handlers.get_jobs_list, outputs=job_list_outputs # Updated Output
         ).then(
             lambda: gr.update(visible=False), outputs=jobs_ui["edit_column"]
         )

@@ -5,7 +5,7 @@ echo [EMinder] Activating Conda Environment ...
 echo [EMinder] To close all servers, press Ctrl+C
 
 REM 激活 Conda 环境 (这是确保 honcho 能被找到的关键)
-call conda activate EMinder
+call conda activate EMinder_new
 
 REM 切换到脚本所在的目录
 cd /d "%~dp0"
