@@ -1,3 +1,4 @@
+# backend/app/templates/customize_templates.py
 """
 ===================================================================================
  EMinder - 自定义邮件模板
@@ -55,6 +56,7 @@ import datetime
 import re
 import glob
 import shutil
+import json  # 导入 json 模块，用于解析脚本配置文件
 from ..core.config import settings
 from ..services.llm_service import llm_service
 from ..services.script_runner_service import script_runner_service
@@ -510,7 +512,7 @@ def get_local_file_report_template(data: dict) -> dict:
 
 
 # ===================================================================================
-# 【模板】: 自动运行脚本并获取日志结果 (保持不变)
+# 【模板】: 自动运行脚本并获取日志结果
 # ===================================================================================
 # ========================== START: MODIFICATION (Flexible Attachments) ==========================
 # DESIGNER'S NOTE:
@@ -520,20 +522,35 @@ def get_local_file_report_template(data: dict) -> dict:
 # 3. 报告：在 HTML 中增加了一个附件列表板块，让用户清晰看到哪些文件被匹配到了。
 script_runner_meta = {
     "display_name": "自动运行脚本并获取日志结果",
-    "description": "在后台运行命令，捕获其输出。支持使用通配符或目录路径来灵活地收集和发送附件。",
+    "description": (
+        "在后台运行命令，捕获其输出。支持使用通配符或目录路径来灵活地收集和发送附件。\n\n"
+        "【高级功能 - 反向控制】\n\n"
+        "您可以在工作目录下用程序生成'eminder_meta.json'，用以动态地自定义正文、标题与附件情况。\n\n脚本执行结束后，如果工作目录下存在名为 'eminder_meta.json' 的文件，\n\n"
+        "系统将读取并**自动删除**它，用以自定义邮件内容。\n\n"
+        "这个操作的优先级高于下方的所有配置。\n\n"
+        "JSON 格式示例：\n"
+        "~~~json\n"
+        "{\n"
+        "  \"subject\": \"自定义标题\",\n"
+        "  \"content\": \"# 自定义正文。可以输入 **Markdown** 语法。\",\n"
+        "  \"attachments\": [\"相对路径/file1.jpg\", \"D:/绝对路径/file2.log\"]\n"
+        "}\n"
+        "~~~"
+    ),
     "fields": [
         {
             "name": "email_body_message",
-            "label": "邮件说明与附言 (可选)",
+            "label": "邮件说明与附言 (默认)",
             "type": "textarea",
-            "default": "您好，这是脚本的运行报告，请查收附件中的文件（如有）。"
+            "default": "您好，这是脚本的运行报告，请查收附件中的文件（如有）。",
+            "info": "如果在 'eminder_meta.json' 中指定了 'content' 字段，此内容将被忽略。"
         },
         {
             "name": "custom_subject",
-            "label": "邮件标题模板",
+            "label": "邮件标题模板 (默认)",
             "type": "text",
             "default": "脚本 <ifsuccess> 报告 - <time>",
-            "info": "使用 <time> 插入时间戳, <ifsuccess> 插入成功/失败状态"
+            "info": "支持 <time> 和 <ifsuccess> 标记。如果在 'eminder_meta.json' 中指定了 'subject' 字段，此设置将被忽略。"
         },
         {
             "name": "script_command",
@@ -572,8 +589,9 @@ script_runner_meta = {
 async def get_script_runner_template(data: dict) -> dict:
     """
     执行脚本，处理日志，并根据灵活的规则收集附件。
+    新增功能：支持从脚本生成的配置文件中读取标题和正文（支持Markdown）。
     """
-    message = data.get("email_body_message", '').strip()
+    default_message = data.get("email_body_message", '').strip()
     command = data.get('script_command', '').strip()
     work_dir = data.get('working_directory', '.').strip()
     summary_prompt = data.get('log_summary_prompt', '').strip()
@@ -590,16 +608,60 @@ async def get_script_runner_template(data: dict) -> dict:
     # 1. 执行脚本
     exec_result = await script_runner_service.run_script(command, work_dir)
 
-    # 2. 处理标题模板
-    timestamp = exec_result.get('start_time', 'N/A')
-    success_str = "成功" if exec_result['success'] else "失败"
-    subject = custom_subject_template.replace("<time>", timestamp)
-    subject = subject.replace("<ifsuccess>", success_str)
+    # ========================== START: MODIFICATION (需求: Script Config) ==========================
+    # DESIGNER'S NOTE:
+    # 这里实现了“通过脚本生成的配置文件自定义邮件内容”的需求。
+    # 脚本可以在工作目录生成 eminder_meta.json。如果存在，我们读取它，
+    # 并在读取后删除以防止污染下次运行。
     
-    # 3. 处理附件规则 (核心升级逻辑)
+    meta_filename = "eminder_meta.json"
+    # 确保使用绝对路径查找，基于脚本实际执行的工作目录
+    abs_work_dir = os.path.abspath(work_dir)
+    meta_path = os.path.join(abs_work_dir, meta_filename)
+    
+    script_meta = {}
+    
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                script_meta = json.load(f)
+            
+            # 读取成功后，尝试删除该文件
+            try:
+                os.remove(meta_path)
+                print(f"[EMinder Info] 成功读取并清除脚本配置文件: {meta_path}")
+            except OSError as e:
+                print(f"[EMinder Warning] 读取配置后删除文件失败: {e}")
+                
+        except Exception as e:
+            # 解析失败，记录到 stderr 以便在报告中体现
+            error_msg = f"\n[EMinder Error] 尝试解析 {meta_filename} 失败: {str(e)}"
+            exec_result['stderr'] += error_msg
+            print(error_msg)
+
+    # 优先使用脚本配置的标题，否则使用 UI 模板生成的标题
+    if script_meta.get("subject"):
+        subject = script_meta["subject"]
+    else:
+        # 使用 UI 模板生成标题
+        timestamp = exec_result.get('start_time', 'N/A')
+        success_str = "成功" if exec_result['success'] else "失败"
+        subject = custom_subject_template.replace("<time>", timestamp)
+        subject = subject.replace("<ifsuccess>", success_str)
+
+    # 优先使用脚本配置的正文，否则使用 UI 设置的默认消息
+    raw_content = script_meta.get("content", default_message)
+    
+    # 【核心修正】将内容通过 convert_markdown_to_html 处理，以支持 Markdown 语法
+    main_message = convert_markdown_to_html(raw_content)
+    
+    # ========================== END: MODIFICATION (需求: Script Config) ============================
+
+    # 3. 处理附件规则 (合并 UI 规则 和 脚本动态规则)
     found_attachments = []
     attachment_report_lines = [] # 用于在HTML中展示
 
+    # 3.1 处理 UI 定义的规则
     if attachment_rules_str:
         rules = [r.strip() for r in attachment_rules_str.split('\n') if r.strip() and not r.strip().startswith('#')]
         
@@ -630,6 +692,25 @@ async def get_script_runner_template(data: dict) -> dict:
             except Exception as e:
                 attachment_report_lines.append(f"<li>❌ 规则 <code>{rule}</code> 处理出错: {str(e)}</li>")
 
+    # ========================== START: MODIFICATION (需求: Script Config Attachments) ==========================
+    # 3.2 处理脚本配置文件中指定的额外附件
+    script_attachments = script_meta.get("attachments", [])
+    if script_attachments:
+        count = 0
+        for path in script_attachments:
+            # 如果是相对路径，相对于工作目录解析
+            full_path = path if os.path.isabs(path) else os.path.abspath(os.path.join(abs_work_dir, path))
+            
+            if os.path.exists(full_path) and os.path.isfile(full_path):
+                found_attachments.append(full_path)
+                count += 1
+            else:
+                attachment_report_lines.append(f"<li>❌ 脚本附件 <code>{path}</code>: 文件未找到</li>")
+        
+        if count > 0:
+            attachment_report_lines.append(f"<li>📄 脚本配置指定: 成功添加 {count} 个附件</li>")
+    # ========================== END: MODIFICATION (需求: Script Config Attachments) ============================
+
     # 去重
     found_attachments = sorted(list(set(found_attachments)))
 
@@ -645,13 +726,15 @@ async def get_script_runner_template(data: dict) -> dict:
     stderr_html = escape_html(exec_result.get('stderr', ''))
 
     html_parts = []
-    html_parts.append(f"<h4>{message}</h4>")
+    
+    # 使用处理后的正文消息 (HTML)
+    html_parts.append(f"<div>{main_message}</div>")
 
     html_parts.append(f"""
         <h4>执行详情 📊</h4>
         <ul>
             <li><strong>命令:</strong> <code>{command}</code></li>
-            <li><strong>工作目录:</strong> <code>{os.path.abspath(work_dir)}</code></li>
+            <li><strong>工作目录:</strong> <code>{abs_work_dir}</code></li>
             <li><strong>状态:</strong> <span style="color: {status_color}; font-weight: bold;">{status_text} (返回码: {exec_result.get('return_code')})</span></li>
             <li><strong>开始时间:</strong> {exec_result.get('start_time', 'N/A')}</li>
             <li><strong>结束时间:</strong> {exec_result.get('end_time', 'N/A')}</li>
@@ -664,7 +747,7 @@ async def get_script_runner_template(data: dict) -> dict:
         html_parts.append("<ul>" + "".join(attachment_report_lines) + "</ul>")
         if found_attachments:
              html_parts.append(f"<p><strong>共计发送 {len(found_attachments)} 个文件。</strong></p>")
-    elif attachment_rules_str:
+    elif attachment_rules_str or script_attachments:
         html_parts.append("<h4>📎 附件收集报告</h4><p>未找到任何符合规则的文件。</p>")
 
     # --- (可选) LLM 总结 ---
