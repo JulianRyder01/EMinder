@@ -24,8 +24,16 @@ if [ -z "$CONDA_BASE" ]; then
 fi
 
 echo "[INFO] Initializing Conda..."
-source "$CONDA_BASE/etc/profile.d/conda.sh"
 
+# source 会在当前脚本进程中加载 conda 的函数，这样下面的 conda activate 才能生效
+if [ -f "$CONDA_BASE/etc/profile.d/conda.sh" ]; then
+    source "$CONDA_BASE/etc/profile.d/conda.sh"
+else
+    echo "[ERROR] Could not find conda.sh at $CONDA_BASE/etc/profile.d/conda.sh"
+    exit 1
+fi
+
+# 2. Check or Create Environment
 if conda info --envs | grep -q "$ENV_NAME"; then
     echo "[INFO] Environment '$ENV_NAME' found."
 else
@@ -39,6 +47,7 @@ else
 fi
 
 echo "[INFO] Activating environment '$ENV_NAME'..."
+
 conda activate "$ENV_NAME"
 if [ $? -ne 0 ]; then
     echo "[ERROR] Failed to activate environment."
@@ -53,7 +62,7 @@ if [ -f "$REQ_FILE" ]; then
         exit 1
     fi
 else
-    echo "[WARNING] requirements.txt not found in root directory."
+    echo "[WARNING] requirements.txt not found in root directory: $REQ_FILE"
 fi
 
 echo ""

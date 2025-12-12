@@ -24,8 +24,8 @@ Clone the repository and run the `one_click_start_windows.bat` script.
 克隆本项目，并运行 `one_click_start_windows.bat` 脚本。
 
 > Linux：  
-Clone the repository and run the `one_click_start_linux.sh` script.  
-克隆本项目，并运行 `one_click_start_linux.sh` 脚本。
+Clone the repository and run the `bash one_click_start_linux.sh` in the project directory.  
+克隆本项目，并在项目目录下运行 `bash one_click_start_linux.sh`。
 
 # Manual of EMinder 使用手册
 <p align="center">
@@ -152,11 +152,11 @@ Follow these steps to get a local copy up and running.
 
 2.  **Create and activate the Conda environment**
     ```sh
-    # Create an environment named 'eminder_env' with Python 3.9
-    conda create --name eminder_env python=3.9 -y
+    # Create an environment named 'EMinder_service' with Python 3.9
+    conda create --name EMinder_service python=3.9 -y
 
     # Activate the environment
-    conda activate eminder_env
+    conda activate EMinder_service
     ```
 
 3.  **Install dependencies**
@@ -372,11 +372,11 @@ EMinder/
 
 2.  **创建并激活 Conda 环境**
     ```sh
-    # 创建一个名为 eminder_env，使用 Python 3.9 的环境
-    conda create --name eminder_env python=3.9 -y
+    # 创建一个名为 EMinder_service，使用 Python 3.9 的环境
+    conda create --name EMinder_service python=3.9 -y
 
     # 激活环境
-    conda activate eminder_env
+    conda activate EMinder_service
     ```
 
 3.  **安装依赖**
