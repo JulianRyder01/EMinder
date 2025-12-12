@@ -146,7 +146,7 @@ Follow these steps to get a local copy up and running.
 
 1.  **Clone the repository**
     ```sh
-    git clone https://github.com/your_username/EMinder.git
+    git clone https://github.com/JulianRyder01/EMinder.git
     cd EMinder
     ```
 
@@ -366,7 +366,7 @@ EMinder/
 
 1.  **克隆仓库**
     ```sh
-    git clone https://github.com/your_username/EMinder.git
+    git clone https://github.com/JulianRyder01/EMinder.git
     cd EMinder
     ```
 
