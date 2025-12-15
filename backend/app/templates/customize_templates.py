@@ -56,7 +56,8 @@ import datetime
 import re
 import glob
 import shutil
-import json  # 导入 json 模块，用于解析脚本配置文件
+import json
+from collections import defaultdict
 from ..core.config import settings
 from ..services.llm_service import llm_service
 from ..services.script_runner_service import script_runner_service
@@ -138,6 +139,150 @@ def _read_and_process_report_file(report_folder: str, report_filename: str) -> d
 # 模块: 每日总结与计划 (Daily Summary & Plan)
 # ===================================================================================
 
+# ========================== START: MODIFICATION (Timeline Logic) ==========================
+# DESIGNER'S NOTE:
+# 这里定义了时间轴渲染所需的常量和辅助函数。
+# 颜色方案选用了较为清新柔和的色调，以适应大多数邮件客户端的浅色背景。
+
+TIMELINE_ICONS = {
+    '工作':'💼','学习':'📚','创作':'🎨','规划':'🧭',
+    '运动':'🏃','娱乐':'🎮','社交':'💬','独思':'🧘',
+    '睡眠':'🌙','饮食':'🍔','洗漱':'🚿','养身':'💊',
+    '通勤':'🚌','家务':'🧹','琐事':'🧾','沉溺':'🧟'
+}
+
+TIMELINE_COLORS = {
+    '工作': '#64B5F6', '学习': '#81C784', '创作': '#FFB74D', '规划': '#BA68C8',
+    '运动': '#E57373', '娱乐': '#F06292', '社交': '#4DB6AC', '独思': '#9575CD',
+    '睡眠': '#90A4AE', '饮食': '#AED581', '洗漱': '#4DD0E1', '养身': '#FF8A65',
+    '通勤': '#FFD54F', '家务': '#A1887F', '琐事': '#E0E0E0', '沉溺': '#546E7A'
+}
+
+def _time_str_to_seconds(t_str):
+    """辅助函数：将 HH:MM:SS 转换为秒"""
+    try:
+        parts = list(map(int, t_str.split(':')))
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    except (ValueError, IndexError):
+        return 0
+
+def _render_timeline_html(log_text: str) -> str:
+    """
+    [核心修改] 将时间日志文本转换为横向时间轴 HTML。
+    该函数包含完整的鲁棒性检查，如果日志为空或解析失败，安全返回空字符串。
+    """
+    if not log_text or not log_text.strip():
+        return ""
+
+    lines = log_text.strip().split('\n')
+    tasks = []
+    # 正则匹配: - [00:00:00 - 01:00:00] [Category] [Main/Sub] | Remark
+    # 兼容 ... 结束时间
+    regex = re.compile(r'^\-\s*\[(\d{2}:\d{2}:\d{2})\s*-\s*(.*?)\]\s*\[(.*?)\]\s*\[(.*?)\/(.*?)\](?:\s*\|\s*(.*))?$')
+    
+    now = datetime.datetime.now()
+    # 计算当前是一天中的第几秒
+    current_seconds_of_day = now.hour * 3600 + now.minute * 60 + now.second
+    # 范围至少显示到当前时间，且至少显示1小时，避免除以0或范围过小
+    total_scope = max(current_seconds_of_day, 3600)
+
+    for line in lines:
+        match = regex.match(line.strip())
+        if match:
+            start_str, end_str, cat, main_cat, sub_cat, remark = match.groups()
+            remark = remark or ''
+            
+            # 处理 "..." 表示进行中，结束时间设为当前时间
+            if '...' in end_str:
+                end_sec = current_seconds_of_day
+                display_end = now.strftime("%H:%M:%S")
+            else:
+                end_sec = _time_str_to_seconds(end_str)
+                display_end = end_str
+            
+            start_sec = _time_str_to_seconds(start_str)
+            duration = end_sec - start_sec
+            
+            if duration > 0:
+                tasks.append({
+                    'start': start_sec,
+                    'duration': duration,
+                    'sub': sub_cat,
+                    'remark': remark,
+                    'raw_start': start_str,
+                    'raw_end': display_end,
+                    'category': cat,
+                    'main': main_cat
+                })
+
+    if not tasks:
+        return ""
+
+    # 按子类名称排序
+    sorted_subs = sorted(list(set(t['sub'] for t in tasks)))
+    
+    # 开始构建 HTML
+    # 使用内联样式以确保邮件兼容性 (Mail clients often strip external CSS)
+    html_parts = []
+    # 容器：添加横向滚动支持，防止在小屏幕上溢出
+    html_parts.append('<div style="font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #fafafa; padding: 15px; border-radius: 8px; border: 1px solid #e0e0e0; margin-top: 15px; overflow-x: auto;">')
+    html_parts.append('<h4 style="margin-top: 0; color: #333;">📊 今日时间轴</h4>')
+    
+    # 1. 时间刻度行
+    html_parts.append('<div style="display: flex; height: 20px; border-bottom: 1px solid #ddd; margin-bottom: 8px; position: relative; min-width: 300px;">')
+    html_parts.append('<div style="width: 30px; flex-shrink: 0;"></div>') # 左侧图标占位
+    html_parts.append('<div style="flex-grow: 1; position: relative;">') # 刻度区
+    
+    # 每小时生成一个刻度
+    hours_to_show = int(total_scope / 3600)
+    for h in range(hours_to_show + 1):
+        sec = h * 3600
+        pct = (sec / total_scope) * 100
+        if pct <= 100:
+            # 时间标签: 偶数小时显示数字，防止拥挤
+            if h % 2 == 0: 
+                html_parts.append(f'<div style="position: absolute; left: {pct}%; top: 0; font-size: 10px; color: #999; transform: translateX(-50%);">{h:02d}</div>')
+            # 刻度线
+            html_parts.append(f'<div style="position: absolute; left: {pct}%; bottom: 0; width: 1px; height: 4px; background: #ccc;"></div>')
+            
+    html_parts.append('</div></div>') # 结束刻度行
+
+    # 2. 轨道行 (Rows)
+    for sub in sorted_subs:
+        icon = TIMELINE_ICONS.get(sub, sub[0].upper() if sub else '?')
+        color = TIMELINE_COLORS.get(sub, '#90A4AE') # 默认颜色
+        
+        html_parts.append('<div style="display: flex; align-items: center; margin-bottom: 6px; min-width: 300px;">')
+        # 左侧图标
+        html_parts.append(f'<div style="width: 30px; font-size: 16px; text-align: center; flex-shrink: 0; cursor: default;" title="{sub}">{icon}</div>')
+        # 右侧轨道槽
+        html_parts.append('<div style="flex-grow: 1; height: 20px; background: #f0f0f0; position: relative; border-radius: 4px;">')
+        
+        # 渲染该轨道上的所有任务块
+        row_tasks = [t for t in tasks if t['sub'] == sub]
+        for t in row_tasks:
+            left_pct = (t['start'] / total_scope) * 100
+            width_pct = (t['duration'] / total_scope) * 100
+            
+            # Tooltip content (使用 title 属性，这是最兼容的实现方式)
+            title_text = f"[{t['raw_start']} - {t['raw_end']}] {t['sub']} | {t['remark']}"
+            
+            # 块样式
+            html_parts.append(f'''
+            <div style="position: absolute; left: {left_pct}%; width: {width_pct}%; 
+                        height: 100%; background-color: {color}; border-radius: 3px; 
+                        box-shadow: 0 1px 2px rgba(0,0,0,0.1);" 
+                 title="{title_text}">
+            </div>
+            ''')
+            
+        html_parts.append('</div></div>') # 结束行
+
+    html_parts.append('</div>') # 结束容器
+    return "".join(html_parts)
+# ========================== END: MODIFICATION (Timeline Logic) ============================
+
+
 # --- 步骤 0: 内部辅助函数 ---
 
 def _create_default_daily_template(filepath: str, plan_items_from_yesterday: list = None):
@@ -157,12 +302,18 @@ def _create_default_daily_template(filepath: str, plan_items_from_yesterday: lis
         # 如果没有昨日计划，提供一个空项供用户填写
         today_items_section += "- [ ] \n"
     
-    # --- 新增 "随手记" 板块 ---
+    
+
+    # 2. 随手记 (LifeQuadrant Notes)
     notes_section = "\n## ✍️ 随手记\n\n- \n"
 
     template_plan = "\n## 🚀 明日计划\n\n- \n"
+
+    # 3. 时间日志 (LifeQuadrant Time Log) - 新增
+    # LifeQuadrant 将自动追加内容到这里
+    time_log_section = "\n## 📊 时间日志\n\n" 
     
-    final_content = template_header + today_items_section + notes_section + template_plan
+    final_content = template_header + today_items_section + notes_section + template_plan + time_log_section
     
     try:
         # 确保目录存在
@@ -179,14 +330,17 @@ def _parse_daily_summary(content: str) -> dict:
     :param content: Markdown文件的字符串内容。
     :return: 包含已办、待办、完成度、明日计划和随手记的字典。
     """
-    # 使用正则表达式安全地提取各个部分的内容
-    today_items_content_match = re.search(r'##\s*📝\s*今日事项\s*([\s\S]*?)(?=\n##|$)', content, re.IGNORECASE)
-    notes_content_match = re.search(r'##\s*✍️\s*随手记\s*([\s\S]*?)(?=\n##|$)', content, re.IGNORECASE)
-    plan_content_match = re.search(r'##\s*🚀\s*明日计划\s*([\s\S]*?)(?=\n##|$)', content, re.IGNORECASE)
+    # 使用正则提取各个部分
+    # 注意：正则需要非贪婪匹配，并且兼容最后一部分没有后续标题的情况
+    today_items_match = re.search(r'##\s*📝\s*今日事项\s*([\s\S]*?)(?=\n##|$)', content, re.IGNORECASE)
+    time_logs_match = re.search(r'##\s*📊\s*时间日志\s*([\s\S]*?)(?=\n##|$)', content, re.IGNORECASE)
+    notes_match = re.search(r'##\s*✍️\s*随手记\s*([\s\S]*?)(?=\n##|$)', content, re.IGNORECASE)
+    plan_match = re.search(r'##\s*🚀\s*明日计划\s*([\s\S]*?)(?=\n##|$)', content, re.IGNORECASE)
 
-    today_items_content = today_items_content_match.group(1).strip() if today_items_content_match else ""
-    notes_content = notes_content_match.group(1).strip() if notes_content_match else ""
-    plan_content = plan_content_match.group(1).strip() if plan_content_match else ""
+    today_items_content = today_items_match.group(1).strip() if today_items_match else ""
+    time_logs_content = time_logs_match.group(1).strip() if time_logs_match else ""
+    notes_content = notes_match.group(1).strip() if notes_match else ""
+    plan_content = plan_match.group(1).strip() if plan_match else ""
 
     # 提取 "今日事项" 中的已完成和未完成项
     done_items = [item.strip() for item in re.findall(r'-\s*\[x\]\s*(.+)', today_items_content, re.IGNORECASE)]
@@ -202,6 +356,7 @@ def _parse_daily_summary(content: str) -> dict:
     return {
         "done": done_items,
         "todo": todo_items,
+        "time_logs": time_logs_content, # 直接返回原始文本供 LLM 分析
         "notes": notes_items,
         "plan": plan_items,
         "total": total_tasks,
@@ -400,12 +555,13 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
 - **今日任务完成率**: {parsed_data['progress']}%
 - **我的随手记**: {', '.join(parsed_data['notes']) if parsed_data['notes'] else '无'}
 - **我的明日计划**: {', '.join(parsed_data['plan']) if parsed_data['plan'] else '未计划'}
+{parsed_data['time_logs'] if parsed_data['time_logs'] else "（今日暂无时间记录）"}
 
 **你的任务:**
 1.  **总结表现**: 简要总结我今天的表现。
-2.  **给予鼓励**: 针对我的完成情况（无论好坏）给予具体、真诚的鼓励。
+2.  **时间利用分析**: 根据时间日志，分析我的时间主要花在了哪些象限（生产/恢复/维护/消耗）？是否有长时间的专注流？或者碎片化严重？ 
 3.  **关联分析**: 结合“随手记”和“未完成事项”，看看是否能发现一些潜在的关联或问题，并提出。
-4.  **结尾祝福**: 最后用一句符合你角色设定的话结尾。
+4.  **结尾建议**: 最后用一句符合你角色设定的话结尾。
 
 请直接生成报告正文，使用Markdown格式，语言亲切自然。
 """
@@ -413,6 +569,22 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
         # 3d. 调用AI并构建邮件
         ai_result = await llm_service.generate_text(prompt)
         ai_analysis_html = convert_markdown_to_html(ai_result['content']) if ai_result['success'] else f"<p>AI分析失败: {ai_result['content']}</p>"
+
+        # ========================== START: MODIFICATION (Time Log Optimization) ==========================
+        # DESIGNER'S NOTE:
+        # 在这里调用新增的 _render_timeline_html 函数。
+        # 同时修复了原代码中如果 time_logs 是字符串时，使用 for item in time_logs 会错误遍历字符的 Bug。
+        # 现在的逻辑是：优先展示可视化的时间轴。同时保留纯文本列表作为辅助（或在无数据时显示提示）。
+        
+        timeline_html = _render_timeline_html(parsed_data.get('time_logs', ''))
+        
+        # 健壮地处理列表显示：按行分割字符串，而不是遍历字符
+        raw_logs = parsed_data.get('time_logs', '')
+        if raw_logs:
+            time_log_list_html = "<ul>" + "".join(f'<li>{item}</li>' for item in raw_logs.split('\n') if item.strip()) + "</ul>"
+        else:
+            time_log_list_html = "<ul><li>暂无时间记录。</li></ul>"
+        # ========================== END: MODIFICATION ============================
 
         subject = f"你的专属每日总结报告 - {today.strftime('%Y-%m-%d')}"
         html_content = f"""
@@ -432,6 +604,13 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
 
             <h4>🚀 明日计划</h4>
             <ul>{''.join(f'<li>{item}</li>' for item in parsed_data['plan']) if parsed_data['plan'] else '<li>暂未规划明日事项。</li>'}</ul>
+
+            <h4>📝 时间记录</h4>
+            {timeline_html}
+            <details>
+                <summary style="cursor: pointer; color: #666; margin-top: 5px;">查看原始记录</summary>
+                {time_log_list_html}
+            </details>
 
             <h4>💡 AI 智能助理分析</h4>
             {ai_analysis_html}
