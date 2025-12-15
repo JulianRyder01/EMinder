@@ -1,4 +1,5 @@
 # backend/app/templates/customize_templates.py
+DEBUG = True
 """
 ===================================================================================
  EMinder - 自定义邮件模板
@@ -141,8 +142,20 @@ def _read_and_process_report_file(report_folder: str, report_filename: str) -> d
 
 # ========================== START: MODIFICATION (Timeline Logic) ==========================
 # DESIGNER'S NOTE:
-# 这里定义了时间轴渲染所需的常量和辅助函数。
-# 颜色方案选用了较为清新柔和的色调，以适应大多数邮件客户端的浅色背景。
+# 定义四大象限及其子项的映射关系，以及对应的颜色配置。
+# 颜色选取逻辑：符合心理预期，同时在邮件白色背景上清晰可见。
+LIFE_QUADRANTS = {
+    '生产': {'items': ['工作', '学习', '创作', '规划'], 'color': '52, 152, 219'}, # 蓝色系
+    '消耗': {'items': ['通勤', '家务', '琐事', '沉溺'], 'color': '149, 165, 166'}, # 灰色系 (沉溺可用深灰)
+    '维护': {'items': ['睡眠', '饮食', '洗漱', '养身'], 'color': '241, 196, 15'}, # 黄色系
+    '恢复': {'items': ['运动', '娱乐', '社交', '独思'], 'color': '46, 204, 113'}  # 绿色系
+}
+
+# 辅助映射：子项 -> 大象限
+SUB_TO_MAIN_MAP = {}
+for main, content in LIFE_QUADRANTS.items():
+    for sub in content['items']:
+        SUB_TO_MAIN_MAP[sub] = main
 
 TIMELINE_ICONS = {
     '工作':'💼','学习':'📚','创作':'🎨','规划':'🧭',
@@ -151,7 +164,7 @@ TIMELINE_ICONS = {
     '通勤':'🚌','家务':'🧹','琐事':'🧾','沉溺':'🧟'
 }
 
-TIMELINE_COLORS = {
+TIMELINE_COLORS_HEX = {
     '工作': '#64B5F6', '学习': '#81C784', '创作': '#FFB74D', '规划': '#BA68C8',
     '运动': '#E57373', '娱乐': '#F06292', '社交': '#4DB6AC', '独思': '#9575CD',
     '睡眠': '#90A4AE', '饮食': '#AED581', '洗漱': '#4DD0E1', '养身': '#FF8A65',
@@ -165,6 +178,181 @@ def _time_str_to_seconds(t_str):
         return parts[0] * 3600 + parts[1] * 60 + parts[2]
     except (ValueError, IndexError):
         return 0
+
+def _seconds_to_hm(seconds):
+    """辅助函数：秒转 Xh Ym"""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    if h > 0:
+        return f"{h}h {m}m"
+    return f"{m}m"
+
+# ========================== START: ANALYTICS PARSER ==========================
+def _parse_time_log_statistics(log_text: str) -> dict:
+    """
+    [核心新增] 解析时间日志，计算四大象限的统计数据。
+    返回结构:
+    {
+        'total_tracked': int (seconds),
+        'quadrants': {
+            '生产': {'duration': 0, 'percent': 0.0, 'breakdown': {'工作': 100, ...}},
+            ...
+        }
+    }
+    """
+    stats = {
+        'total_tracked': 0,
+        'quadrants': {k: {'duration': 0, 'percent': 0.0, 'breakdown': defaultdict(int)} for k in LIFE_QUADRANTS.keys()}
+    }
+
+    if not log_text or not log_text.strip():
+        return stats
+
+    lines = log_text.strip().split('\n')
+    regex = re.compile(r'^\-\s*\[(\d{2}:\d{2}:\d{2})\s*-\s*(.*?)\]\s*\[(.*?)\]\s*\[(.*?)\/(.*?)\](?:\s*\|\s*(.*))?$')
+    
+    now = datetime.datetime.now()
+    current_seconds_of_day = now.hour * 3600 + now.minute * 60 + now.second
+
+    for line in lines:
+        match = regex.match(line.strip())
+        if match:
+            start_str, end_str, cat, main_cat, sub_cat, remark = match.groups()
+            
+            if '...' in end_str:
+                end_sec = current_seconds_of_day
+            else:
+                end_sec = _time_str_to_seconds(end_str)
+            
+            start_sec = _time_str_to_seconds(start_str)
+            duration = end_sec - start_sec
+            
+            if duration > 0:
+                stats['total_tracked'] += duration
+                
+                # 确定大象限：优先使用映射表，如果日志里写的Main/Sub不匹配，尝试映射Sub，最后回退到日志里的Main
+                quadrant = SUB_TO_MAIN_MAP.get(sub_cat)
+                if not quadrant and main_cat in LIFE_QUADRANTS:
+                    quadrant = main_cat
+                
+                if quadrant and quadrant in stats['quadrants']:
+                    stats['quadrants'][quadrant]['duration'] += duration
+                    stats['quadrants'][quadrant]['breakdown'][sub_cat] += duration
+
+    # 计算百分比
+    total = stats['total_tracked']
+    if total > 0:
+        for q in stats['quadrants']:
+            stats['quadrants'][q]['percent'] = (stats['quadrants'][q]['duration'] / total) * 100
+
+    return stats
+# ========================== END: ANALYTICS PARSER ==========================
+
+
+# ========================== START: VISUALIZATION RENDERERS ==========================
+def _render_quadrant_heatmap(stats: dict) -> str:
+    """
+    [核心新增] 生成四大象限的 2x2 热力矩阵图 (HTML)。
+    颜色深浅基于投入时间比重。
+    布局：
+    消耗 | 生产
+    维护 | 恢复
+    """
+    quadrants = stats['quadrants']
+    total_time = stats['total_tracked']
+    if total_time == 0:
+        return "<p>暂无数据生成象限图。</p>"
+
+    # 布局顺序：左上(消耗)，右上(生产)，左下(维护)，右下(恢复) —— 参考用户图片
+    layout_order = ['消耗', '生产', '维护', '恢复']
+    
+    html = ['<div style="display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 4px; width: 100%; max-width: 500px; height: 300px; margin: 20px 0; font-family: sans-serif;">']
+
+    for q_name in layout_order:
+        data = quadrants.get(q_name, {'duration': 0, 'percent': 0})
+        rgb = LIFE_QUADRANTS[q_name]['color']
+        
+        # 计算透明度：基于占比，最低 0.1，最高 0.9。
+        # 算法：Base 0.1 + (Percent / 50 * 0.8) -> 假设单象限最大占比50%时颜色最深，超过也按最深算
+        alpha = 0.1 + min(data['percent'] / 40.0, 1.0) * 0.8
+        bg_color = f"rgba({rgb}, {alpha:.2f})"
+        border_color = f"rgba({rgb}, 1)"
+        
+        duration_str = _seconds_to_hm(data['duration'])
+        
+        # 找出该象限下Top 2的子项
+        breakdown = data.get('breakdown', {})
+        sorted_subs = sorted(breakdown.items(), key=lambda x: x[1], reverse=True)[:2]
+        subs_str = " ".join([f"{k}" for k, v in sorted_subs])
+
+        cell_html = f"""
+        <div style="background-color: {bg_color}; border: 2px solid {border_color}; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; justify-content: center; align-items: center; color: #333;">
+            <div style="font-size: 16px; font-weight: bold; margin-bottom: 5px;">{q_name}</div>
+            <div style="font-size: 14px;">{data['percent']:.1f}%</div>
+            <div style="font-size: 12px; color: #555;">{duration_str}</div>
+            <div style="font-size: 10px; color: #777; margin-top: 4px;">{subs_str}</div>
+        </div>
+        """
+        html.append(cell_html)
+
+    html.append('</div>')
+    return "".join(html)
+
+
+def _render_trend_stack_chart(daily_stats_list: list) -> str:
+    """
+    [核心新增] 生成周期趋势堆叠图 (HTML)。
+    横轴：日期
+    纵轴：100% 堆叠柱状图 (四大象限)
+    """
+    if not daily_stats_list:
+        return ""
+
+    html = []
+    html.append('<div style="margin-top: 20px; font-family: sans-serif;">')
+    html.append('<h4>📈 生活重心趋势 (堆叠图)</h4>')
+    html.append('<div style="display: flex; height: 200px; align-items: flex-end; width: 100%; overflow-x: auto; padding-bottom: 5px;">')
+
+    # 图例
+    legend_html = '<div style="display: flex; justify-content: center; margin-bottom: 10px; font-size: 12px;">'
+    for q_name in ['生产', '消耗', '维护', '恢复']:
+        rgb = LIFE_QUADRANTS[q_name]['color']
+        color = f"rgba({rgb}, 0.7)"
+        legend_html += f'<div style="display:flex; align-items:center; margin-right: 15px;"><span style="width:10px; height:10px; background:{color}; margin-right:5px; display:inline-block;"></span>{q_name}</div>'
+    legend_html += '</div>'
+    html.insert(1, legend_html)
+
+    for day_data in daily_stats_list:
+        date_label = day_data['date_str'] # e.g. "03-15"
+        stats = day_data['stats']
+        total = stats['total_tracked']
+        
+        html.append('<div style="flex: 1; min-width: 40px; margin: 0 2px; display: flex; flex-direction: column-reverse; height: 100%;">')
+        
+        # 渲染柱子
+        bar_html = []
+        if total > 0:
+            for q_name in ['生产', '恢复', '维护', '消耗']: # 堆叠顺序
+                q_data = stats['quadrants'].get(q_name)
+                pct = q_data['percent']
+                if pct > 0:
+                    rgb = LIFE_QUADRANTS[q_name]['color']
+                    # Tooltip title
+                    title = f"{date_label} {q_name}: {pct:.1f}% ({_seconds_to_hm(q_data['duration'])})"
+                    bar_html.append(f'<div style="height: {pct}%; background-color: rgba({rgb}, 0.8); width: 100%;" title="{title}"></div>')
+        else:
+             # 无数据占位
+             bar_html.append('<div style="height: 100%; background-color: #eee;" title="无数据"></div>')
+        
+        html.append("".join(bar_html))
+        
+        # 日期标签
+        html.append(f'<div style="text-align: center; font-size: 10px; color: #666; margin-top: 4px; writing-mode: horizontal-tb;">{date_label}</div>')
+        html.append('</div>')
+
+    html.append('</div></div>')
+    return "".join(html)
+
 
 def _render_timeline_html(log_text: str) -> str:
     """
@@ -250,7 +438,7 @@ def _render_timeline_html(log_text: str) -> str:
     # 2. 轨道行 (Rows)
     for sub in sorted_subs:
         icon = TIMELINE_ICONS.get(sub, sub[0].upper() if sub else '?')
-        color = TIMELINE_COLORS.get(sub, '#90A4AE') # 默认颜色
+        color = TIMELINE_COLORS_HEX.get(sub, '#90A4AE') 
         
         html_parts.append('<div style="display: flex; align-items: center; margin-bottom: 6px; min-width: 300px;">')
         # 左侧图标
@@ -390,9 +578,9 @@ async def _generate_period_summary(period_days: int, period_name: str, data: dic
     for filepath in glob.glob(os.path.join(history_path, "*.md")):
         filename = os.path.basename(filepath)
         try:
-            # 文件名现在就是日期
-            file_date_str = os.path.splitext(filename)[0]
-            file_date = datetime.datetime.strptime(file_date_str, "%Y-%m-%d").date()
+            # 文件名格式兼容 YYYY-MM-DD.md
+            date_str = filename[:10]
+            file_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
             if start_date <= file_date < today: # Exclude today
                 relevant_files.append((file_date, filepath))
         except (ValueError, TypeError):
@@ -405,51 +593,90 @@ async def _generate_period_summary(period_days: int, period_name: str, data: dic
         }
 
     relevant_files.sort()
+    
+    # 聚合数据容器
     all_done_tasks, all_todo_tasks, all_notes = [], [], []
     total_tasks_count = 0
     progress_per_day = []
+    daily_stats_list = [] # 用于绘制堆叠图
+
+    # 聚合象限数据
+    aggregated_quadrants = {k: {'duration': 0} for k in LIFE_QUADRANTS.keys()}
+    total_tracked_period = 0
     
     for file_date, filepath in relevant_files:
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
             parsed = _parse_daily_summary(content)
+            
+            # 任务数据
             all_done_tasks.extend(parsed["done"])
             all_todo_tasks.extend(parsed["todo"])
             all_notes.extend(parsed["notes"])
             total_tasks_count += parsed["total"]
             progress_per_day.append({"date": file_date.strftime("%m-%d"), "progress": parsed["progress"]})
-    
+
+            # 时间统计数据
+            stats = _parse_time_log_statistics(parsed["time_logs"])
+            daily_stats_list.append({'date_str': file_date.strftime("%m-%d"), 'stats': stats})
+            
+            # 全局累加
+            total_tracked_period += stats['total_tracked']
+            for q, q_data in stats['quadrants'].items():
+                aggregated_quadrants[q]['duration'] += q_data['duration']
+
     overall_progress = (len(all_done_tasks) / total_tasks_count * 100) if total_tasks_count > 0 else 0
+
+    # 计算周期内的象限占比
+    quadrant_summary_text = []
+    for q_name, q_data in aggregated_quadrants.items():
+        dur = q_data['duration']
+        pct = (dur / total_tracked_period * 100) if total_tracked_period > 0 else 0
+        q_data['percent'] = pct # 补全 percent 字段用于绘图
+        quadrant_summary_text.append(f"{q_name}: {_seconds_to_hm(dur)} ({pct:.1f}%)")
+    
+    # 构建可视化
+    # 1. 周期总体热力图 (使用聚合数据)
+    aggregated_stats_obj = {'total_tracked': total_tracked_period, 'quadrants': aggregated_quadrants}
+    heatmap_html = _render_quadrant_heatmap(aggregated_stats_obj)
+    
+    # 2. 每日趋势堆叠图
+    trend_chart_html = _render_trend_stack_chart(daily_stats_list)
 
     # 4. 构建AI Prompt
     progress_str = ", ".join([f"{p['date']}: {p['progress']}%" for p in progress_per_day])
-    done_tasks_str = "; ".join(all_done_tasks)
-    todo_tasks_str = "; ".join(all_todo_tasks)
-    notes_str = "; ".join(all_notes)
-
+    
     prompt = f"""
 {system_prompt}
 我将为你提供我过去{period_days}天的每日任务完成情况数据。请你基于这些数据，为我生成一份详细的{period_name}总结报告。
 
-报告需要包含以下几个部分：
-1.  **数据概览**: 总结核心数据指标。
-2.  **多维度分析**:
-    *   **一致性与趋势**: 我的坚持情况如何？效率是上升还是下降？
-    *   **亮点与成就**: 我做得好的地方是什么？完成了哪些值得称赞的任务？
-    *   **挑战与反思**: 从未完成的任务和随手记中，是否能发现我遇到的困难或反复出现的主题？
-3.  **鼓励与建议**: 给出具体、可执行的建议，并用你设定的角色语气鼓励我。
+**数据概览:**
+- 总任务数: {total_tasks_count}, 完成: {len(all_done_tasks)}, 完成率: {overall_progress:.1f}%
+- 每日完成率趋势: {progress_str}
 
-**输入数据:**
-- **时间范围**: 过去 {period_days} 天
-- **总计划任务数**: {total_tasks_count}
-- **总完成任务数**: {len(all_done_tasks)}
-- **总体完成率**: {overall_progress:.1f}%
-- **每日进度列表**: {progress_str}
-- **完成的任务摘要**: {done_tasks_str or '无'}
-- **遗留的任务摘要**: {todo_tasks_str or '无'}
-- **随手记摘要**: {notes_str or '无'}
+**生活平衡数据 (四象限分析):**
+- 总记录时间: {_seconds_to_hm(total_tracked_period)}
+- 象限分布: {', '.join(quadrant_summary_text)}
 
-请直接生成Markdown格式的报告正文，无需客套话。
+**详细内容:**
+- 完成的任务: {'; '.join(all_done_tasks[:50])}...
+- 遗留的任务: {'; '.join(all_todo_tasks[:20])}...
+- 随手记 (Thoughts): {'; '.join(all_notes)}
+
+关于四象限分析的简要介绍:
+本日志采用 “能量流向”四象限模型 归类所有活动，以追踪时间在价值创造、能量恢复、维持生存和被动消耗中的分布。四象限及下辖的十六个子类定义如下：
+
+生产	高能量输出	主动创造价值，构建未来，提升个人资本的活动。	工作、学习、创作、规划
+恢复	能量回充	主动进行的、高质量的身心放松与自我关怀活动。	运动、娱乐、社交、独思
+维护	维持基线	作为生物体和独立个体，为保持正常运作所必需的生存性、规律性活动。	睡眠、饮食、洗漱、养身
+消耗	能量流失	低价值回报、伴随系统摩擦或无意识被动卷入的时间黑洞。	通勤、家务、琐事、沉溺
+**你的任务:**
+1.  **生活平衡诊断**: 基于象限数据，分析我的生活重心。是“生产”过载，还是“恢复”不足？是否存在过多的“消耗”？
+2.  **趋势分析**: 效率是上升还是下降？
+3.  **深层洞察**: 结合任务和随手记，发现我的焦虑来源或成就模式。
+4.  **下阶段建议**: 给出具体的调整建议（例如：增加运动，减少碎片化家务等）。
+
+请使用Markdown格式，分析要深刻且具建设性。
 """
     
     # 5. 调用AI并构建邮件
@@ -461,12 +688,18 @@ async def _generate_period_summary(period_days: int, period_name: str, data: dic
         <h4>数据概览</h4>
         <ul>
             <li><strong>时间范围:</strong> {start_date.strftime('%Y-%m-%d')} 至 {(today - datetime.timedelta(days=1)).strftime('%Y-%m-%d')}</li>
-            <li><strong>有效天数:</strong> {len(relevant_files)} / {period_days} 天</li>
             <li><strong>总计划任务:</strong> {total_tasks_count} 项</li>
             <li><strong>总完成任务:</strong> {len(all_done_tasks)} 项</li>
             <li><strong>总体完成率:</strong> <span style="font-size: 18px; color: #4CAF50; font-weight: bold;">{overall_progress:.1f}%</span></li>
         </ul>
-        <h4>AI智能分析与建议</h4>
+        
+        <h4>📊 生活平衡象限 (LifeQuadrant)</h4>
+        {heatmap_html}
+        
+        <h4>📈 时间投入趋势</h4>
+        {trend_chart_html}
+
+        <h4>🧠 AI深度分析与建议</h4>
         {ai_analysis_html}
     """
     
@@ -544,47 +777,68 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
         except Exception as e:
              print(f"备份文件到history时出错: {e}")
             
+        # ========================== START: MODIFICATION (Time Log Stats) ==========================
+        # 解析时间统计数据
+        time_logs_text = parsed_data.get('time_logs', '')
+        time_stats = _parse_time_log_statistics(time_logs_text)
+        
+        # 生成可视化 HTML
+        timeline_html = _render_timeline_html(time_logs_text)
+        heatmap_html = _render_quadrant_heatmap(time_stats)
+        
+        # 准备统计摘要给 AI
+        quadrant_text_list = []
+        for q, d in time_stats['quadrants'].items():
+            if d['duration'] > 0:
+                # 找出主要构成
+                top_sub = max(d['breakdown'], key=d['breakdown'].get) if d['breakdown'] else "无"
+                quadrant_text_list.append(f"{q}: {d['percent']:.1f}% ({_seconds_to_hm(d['duration'])}, 主项:{top_sub})")
+        quadrant_summary = ", ".join(quadrant_text_list) if quadrant_text_list else "暂无有效时间记录"
+        # ========================== END: MODIFICATION ============================
+
         # 3c. 构建AI Prompt
         prompt = f"""
 {system_prompt}
 请为我生成一份总结报告。
 截至总结报告时，当前时间为 {datetime.datetime.now().strftime("%Y年%m月%d日%H:%M:%S")}
-**我的今日数据:**
+我的今日数据:
 - **已完成事项**: {', '.join(parsed_data['done']) if parsed_data['done'] else '无'}
 - **未完成事项**: {', '.join(parsed_data['todo']) if parsed_data['todo'] else '无'}
 - **今日任务完成率**: {parsed_data['progress']}%
 - **我的随手记**: {', '.join(parsed_data['notes']) if parsed_data['notes'] else '无'}
 - **我的明日计划**: {', '.join(parsed_data['plan']) if parsed_data['plan'] else '未计划'}
-{parsed_data['time_logs'] if parsed_data['time_logs'] else "（今日暂无时间记录）"}
 
-**你的任务:**
+我的时间投入记录：{parsed_data['time_logs'] if parsed_data['time_logs'] else "（今日暂无时间记录）"}
+
+关于四象限分析的简要介绍:
+本日志采用 “能量流向”四象限模型 归类所有活动，以追踪时间在价值创造、能量恢复、维持生存和被动消耗中的分布。四象限及下辖的十六个子类定义如下：
+
+生产	高能量输出	主动创造价值，构建未来，提升个人资本的活动。	工作、学习、创作、规划
+恢复	能量回充	主动进行的、高质量的身心放松与自我关怀活动。	运动、娱乐、社交、独思
+维护	维持基线	作为生物体和独立个体，为保持正常运作所必需的生存性、规律性活动。	睡眠、饮食、洗漱、养身
+消耗	能量流失	低价值回报、伴随系统摩擦或无意识被动卷入的时间黑洞。	通勤、家务、琐事、沉溺
+
+**时间投入分析 (Life Quadrant):**
+- 总记录时间: {_seconds_to_hm(time_stats['total_tracked'])}
+- 象限分布: {quadrant_summary}
+你的任务:
 1.  **总结表现**: 简要总结我今天的表现。
-2.  **时间利用分析**: 根据时间日志，分析我的时间主要花在了哪些象限（生产/恢复/维护/消耗）？是否有长时间的专注流？或者碎片化严重？ 
+2.  **时间利用分析**: 结合上述象限数据，点评我的时间分配。
 3.  **关联分析**: 结合“随手记”和“未完成事项”，看看是否能发现一些潜在的关联或问题，并提出。
 4.  **结尾建议**: 最后用一句符合你角色设定的话结尾。
 
 请直接生成报告正文，使用Markdown格式，语言亲切自然。
 """
-        
+
         # 3d. 调用AI并构建邮件
         ai_result = await llm_service.generate_text(prompt)
         ai_analysis_html = convert_markdown_to_html(ai_result['content']) if ai_result['success'] else f"<p>AI分析失败: {ai_result['content']}</p>"
 
-        # ========================== START: MODIFICATION (Time Log Optimization) ==========================
-        # DESIGNER'S NOTE:
-        # 在这里调用新增的 _render_timeline_html 函数。
-        # 同时修复了原代码中如果 time_logs 是字符串时，使用 for item in time_logs 会错误遍历字符的 Bug。
-        # 现在的逻辑是：优先展示可视化的时间轴。同时保留纯文本列表作为辅助（或在无数据时显示提示）。
-        
-        timeline_html = _render_timeline_html(parsed_data.get('time_logs', ''))
-        
-        # 健壮地处理列表显示：按行分割字符串，而不是遍历字符
         raw_logs = parsed_data.get('time_logs', '')
         if raw_logs:
             time_log_list_html = "<ul>" + "".join(f'<li>{item}</li>' for item in raw_logs.split('\n') if item.strip()) + "</ul>"
         else:
             time_log_list_html = "<ul><li>暂无时间记录。</li></ul>"
-        # ========================== END: MODIFICATION ============================
 
         subject = f"你的专属每日总结报告 - {today.strftime('%Y-%m-%d')}"
         html_content = f"""
@@ -592,7 +846,13 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
             <div style="width: 100%; background-color: #e0e0e0; border-radius: 5px; height: 20px; overflow: hidden;">
                 <div style="background-color: #4CAF50; width: {parsed_data['progress']}%; height: 100%; text-align: center; color: white; line-height: 20px; font-weight: bold; border-radius: 5px;">{parsed_data['progress']}%</div>
             </div>
+            
+            <h4>📊 LifeQuadrant 象限热力图</h4>
+            {heatmap_html}
 
+            <h4>⏱️ 时间轴可视化</h4>
+            {timeline_html}
+            
             <h4>✅ 已办清单</h4>
             <ul>{''.join(f'<li>{item}</li>' for item in parsed_data['done']) if parsed_data['done'] else '<li>今日暂无完成事项</li>'}</ul>
 
@@ -604,11 +864,9 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
 
             <h4>🚀 明日计划</h4>
             <ul>{''.join(f'<li>{item}</li>' for item in parsed_data['plan']) if parsed_data['plan'] else '<li>暂未规划明日事项。</li>'}</ul>
-
-            <h4>📝 时间记录</h4>
-            {timeline_html}
+            
             <details>
-                <summary style="cursor: pointer; color: #666; margin-top: 5px;">查看原始记录</summary>
+                <summary style="cursor: pointer; color: #666; margin-top: 5px;">查看原始时间文本</summary>
                 {time_log_list_html}
             </details>
 
@@ -687,7 +945,6 @@ def get_local_file_report_template(data: dict) -> dict:
         "html": html_content
         # 注意：这里不返回 "attachments" 键，因为附件是从API直接处理的
     }
-# ========================== END: 修改区域 (需求 ①) ============================
 
 
 # ===================================================================================
