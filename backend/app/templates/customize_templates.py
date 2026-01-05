@@ -643,33 +643,35 @@ async def _generate_period_summary(period_days: int, period_name: str, data: dic
     # 2. 每日趋势堆叠图
     trend_chart_html = _render_trend_stack_chart(daily_stats_list)
 
-    # 4. 构建AI Prompt
+    # 3. 构建AI Prompt
     progress_str = ", ".join([f"{p['date']}: {p['progress']}%" for p in progress_per_day])
     
     prompt = f"""
 {system_prompt}
-我将为你提供我过去{period_days}天的每日任务完成情况数据。请你基于这些数据，为我生成一份详细的{period_name}总结报告。
+我将为你提供我过去{period_days}天的每日任务完成情况数据。
 
-**数据概览:**
+请你基于这些数据，为我分析。——{period_name}。
+
+**我的生活数据概览:**
 - 总任务数: {total_tasks_count}, 完成: {len(all_done_tasks)}, 完成率: {overall_progress:.1f}%
 - 每日完成率趋势: {progress_str}
 
-**生活平衡数据 (四象限分析):**
+**我的能量流向 (四象限时间分布):**
 - 总记录时间: {_seconds_to_hm(total_tracked_period)}
 - 象限分布: {', '.join(quadrant_summary_text)}
 
 **详细内容:**
-- 完成的任务: {'; '.join(all_done_tasks[:50])}...
-- 遗留的任务: {'; '.join(all_todo_tasks[:20])}...
-- 随手记 (Thoughts): {'; '.join(all_notes)}
+- 完成的任务: {'; '.join(all_done_tasks)}...
+- 遗留的任务: {'; '.join(all_todo_tasks)}...
+- 我的随手记: {'; '.join(all_notes)}
 
 关于四象限分析的简要介绍:
 本日志采用 “能量流向”四象限模型 归类所有活动，以追踪时间在价值创造、能量恢复、维持生存和被动消耗中的分布。四象限及下辖的十六个子类定义如下：
 
-生产	高能量输出	主动创造价值，构建未来，提升个人资本的活动。	工作、学习、创作、规划
-恢复	能量回充	主动进行的、高质量的身心放松与自我关怀活动。	运动、娱乐、社交、独思
-维护	维持基线	作为生物体和独立个体，为保持正常运作所必需的生存性、规律性活动。	睡眠、饮食、洗漱、养身
-消耗	能量流失	低价值回报、伴随系统摩擦或无意识被动卷入的时间黑洞。	通勤、家务、琐事、沉溺
+生产	高能量输出	主动创造价值，构建未来，提升个人资本的活动。	包括：工作、学习、创作、规划
+恢复	能量回充	主动进行的、高质量的身心放松与自我关怀活动。	包括：运动、娱乐、社交、独思
+维护	维持基线	作为生物体和独立个体，为保持正常运作所必需的生存性、规律性活动。	包括：睡眠、饮食、洗漱、养身
+消耗	能量流失	低价值回报、伴随系统摩擦或无意识被动卷入的时间黑洞。	包括：通勤、家务、琐事、沉溺
 **你的任务:**
 1.  **生活平衡诊断**: 基于象限数据，分析我的生活重心。是“生产”过载，还是“恢复”不足？是否存在过多的“消耗”？
 2.  **趋势分析**: 效率是上升还是下降？
@@ -678,8 +680,10 @@ async def _generate_period_summary(period_days: int, period_name: str, data: dic
 
 请使用Markdown格式，分析要深刻且具建设性。
 """
-    
-    # 5. 调用AI并构建邮件
+
+    if DEBUG:
+        print("构建的AI Prompt:",prompt)
+    # 4. 调用AI并构建邮件
     ai_result = await llm_service.generate_text(prompt)
     ai_analysis_html = convert_markdown_to_html(ai_result['content']) if ai_result['success'] else f"<p>AI分析失败: {ai_result['content']}</p>"
 
@@ -769,8 +773,8 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
         
         parsed_data = _parse_daily_summary(content)
         
-        # 3b. 将当前内容归档到history，但不删除源文件
-        history_summary_filepath = os.path.join(history_path, f"{today.strftime('%Y-%m-%d')}_summary_{datetime.datetime.now().strftime('%H%M%S')}.md")
+        # 3b. 将当前内容归档到history
+        history_summary_filepath = os.path.join(history_path, f"{today.strftime('%Y-%m-%d')}.md")
         try:
             shutil.copy(today_filepath, history_summary_filepath)
             print(f"成功将当前总结备份到: {history_summary_filepath}")
@@ -829,7 +833,8 @@ async def generate_daily_summary_plan_template(data: dict) -> dict:
 
 请直接生成报告正文，使用Markdown格式，语言亲切自然。
 """
-
+        if DEBUG:
+            print("发送给AI的提示词为：",prompt)
         # 3d. 调用AI并构建邮件
         ai_result = await llm_service.generate_text(prompt)
         ai_analysis_html = convert_markdown_to_html(ai_result['content']) if ai_result['success'] else f"<p>AI分析失败: {ai_result['content']}</p>"
@@ -1468,6 +1473,118 @@ def get_quick_message_template(data: dict) -> dict:
 
 
 # ===================================================================================
+# 【新增模板】: 深度学习训练报告 (AI 总结)
+# ===================================================================================
+
+# --- 步骤 1: 定义元数据 ---
+training_report_meta = {
+    "display_name": "深度学习训练报告 (AI Summary)",
+    "description": "接收训练脚本的元数据和日志片段，调用 LLM 生成总结报告，并支持附件发送。",
+    "fields": [
+        {
+            "name": "run_name",
+            "label": "Run Name",
+            "type": "text",
+            "default": "Experiment_001"
+        },
+        {
+            "name": "dataset",
+            "label": "Dataset",
+            "type": "text",
+            "default": "mosei"
+        },
+        {
+            "name": "status",
+            "label": "Exit Status",
+            "type": "text",
+            "default": "Success"
+        },
+        {
+            "name": "raw_log",
+            "label": "Raw Log Snippet",
+            "type": "textarea",
+            "default": "Epoch 10: Loss 0.05..."
+        }
+    ]
+}
+
+# --- 步骤 2: 编写模板生成函数 ---
+async def get_training_report_template(data: dict) -> dict:
+    """
+    生成训练报告。
+    1. 获取传入的日志片段。
+    2. 调用 LLM 服务生成总结。
+    3. 组装 HTML。
+    """
+    run_name = data.get("run_name", "Unknown Run")
+    dataset = data.get("dataset", "Unknown Dataset")
+    status = data.get("status", "Unknown")
+    raw_log = data.get("raw_log", "")
+    
+    # 1. 准备 AI 总结
+    ai_summary_html = "<p><em>暂无日志或日志过短，未进行 AI 分析。</em></p>"
+    
+    if raw_log and len(raw_log.strip()) > 50:
+        prompt = f"""
+        你是一个深度学习训练助手。请根据以下训练日志的片段（通常是最后一部分），为我总结这次训练的情况。
+        
+        训练名称: {run_name}
+        数据集: {dataset}
+        
+        日志内容:
+        ---
+        {raw_log}
+        ---
+        
+        请简要回答以下几点（如果日志中包含相关信息）：
+        1. 训练是否正常结束？
+        2. 最终的 Loss 或 评估指标（Accuracy/F1等）是多少？
+        3. 是否出现了明显的错误或异常？
+        
+        使用 HTML 格式输出，不需要包含 ```html 代码块标记。
+        """
+        
+        try:
+            # 调用后端的 LLM 服务
+            ai_result = await llm_service.generate_text(prompt)
+            if ai_result["success"]:
+                ai_summary_html = convert_markdown_to_html(ai_result['content'])
+            else:
+                ai_summary_html = f"<p style='color:red'>AI 总结生成失败: {ai_result['content']}</p>"
+        except Exception as e:
+            ai_summary_html = f"<p style='color:red'>调用 AI 服务时发生异常: {str(e)}</p>"
+
+    # 2. 状态颜色
+    status_color = "#4CAF50" if status.lower() == "success" else "#F44336"
+
+    # 3. 组装邮件内容
+    subject = f"训练报告 [{status}]: {run_name}"
+    
+    html_content = f"""
+        <h4>基本信息</h4>
+        <ul>
+            <li><strong>Run Name:</strong> {run_name}</li>
+            <li><strong>Dataset:</strong> {dataset}</li>
+            <li><strong>Status:</strong> <span style="color: {status_color}; font-weight: bold;">{status}</span></li>
+            <li><strong>Time:</strong> {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</li>
+        </ul>
+
+        <h4>🧠 AI 训练总结</h4>
+        <div style="background-color: #e8f5e9; padding: 15px; border-radius: 8px; border-left: 5px solid #4CAF50;">
+            {ai_summary_html}
+        </div>
+
+        <h4>📋 原始日志 (Last 2000 chars)</h4>
+        <pre style="background-color: #f5f5f5; padding: 10px; border-radius: 5px; font-size: 12px; color: #333; max-height: 300px; overflow-y: auto;">{raw_log[-2000:] if raw_log else "No logs provided."}</pre>
+        
+        <p style="margin-top: 20px;"><em>注：完整结果图表请查看邮件附件。</em></p>
+    """
+
+    return {
+        "subject": subject,
+        "html": html_content
+    }
+# ===================================================================================
 # 示例模板 1: 月度学习报告 (Monthly Learning Report) - 保留源代码中已有的示例
 # ===================================================================================
 
@@ -1592,6 +1709,10 @@ custom_templates = {
     "monthly_learning_report": {
         "meta": monthly_learning_report_meta,
         "func": get_monthly_learning_report_template
+    },
+    "training_report": {
+        "meta": training_report_meta,
+        "func": get_training_report_template
     },
     # 如果你创建了更多模板，可以像下面这样继续添加:
     # "my_another_template": {
